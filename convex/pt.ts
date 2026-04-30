@@ -241,7 +241,7 @@ export const listEnviosPTRound = query({
           ux_exp: e.uxExp ?? null,
         }
       })
-      .filter((r): r is NonNullable<typeof r> => r !== null && r.participant_id !== '' && r.replicate > 0)
+      .filter((r): r is NonNullable<typeof r> => r !== null)
 
     exported.sort((a, b) => {
       if (a.pollutant !== b.pollutant) return a.pollutant.localeCompare(b.pollutant)
@@ -253,6 +253,39 @@ export const listEnviosPTRound = query({
     })
 
     return exported
+  },
+})
+
+export const listAllEnviosPT = query({
+  args: { rondaId: v.id('rondas') },
+  handler: async (ctx, { rondaId }) => {
+    const [envios, items, sampleGroups, participantes] = await Promise.all([
+      ctx.db.query('enviosPt').withIndex('by_ronda', (q) => q.eq('rondaId', rondaId)).collect(),
+      ctx.db.query('rondaPtItems').withIndex('by_ronda', (q) => q.eq('rondaId', rondaId)).collect(),
+      ctx.db.query('rondaPtSampleGroups').withIndex('by_ronda', (q) => q.eq('rondaId', rondaId)).collect(),
+      ctx.db.query('rondaParticipantes').withIndex('by_ronda', (q) => q.eq('rondaId', rondaId)).collect(),
+    ])
+
+    const itemMap = new Map(items.map((item) => [item._id, item]))
+    const groupMap = new Map(sampleGroups.map((group) => [group._id, group]))
+    const participanteMap = new Map(participantes.map((participante) => [participante._id, participante]))
+
+    return envios
+      .map((envio) => {
+        const ptItem = itemMap.get(envio.ptItemId)
+        const sampleGroup = groupMap.get(envio.sampleGroupId)
+        const participante = participanteMap.get(envio.rondaParticipanteId)
+
+        if (!ptItem || !sampleGroup || !participante) return null
+
+        return {
+          envio,
+          ptItem,
+          sampleGroup,
+          participante,
+        }
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null)
   },
 })
 
@@ -352,7 +385,38 @@ export const createPTItem = mutation({
     sortOrder:  v.number(),
   },
   handler: async (ctx, { rondaId, contaminante, runCode, levelLabel, sortOrder }) => {
-    return ctx.db.insert('rondaPtItems', { rondaId, contaminante, runCode, levelLabel, sortOrder, createdAt: Date.now() })
+    const id = await ctx.db.insert('rondaPtItems', { rondaId, contaminante, runCode, levelLabel, sortOrder, createdAt: Date.now() })
+    return ctx.db.get(id)
+  },
+})
+
+export const createPTItemsBulk = mutation({
+  args: {
+    rondaId:      v.id('rondas'),
+    contaminante: v.union(
+      v.literal('CO'), v.literal('SO2'), v.literal('O3'), v.literal('NO'), v.literal('NO2')
+    ),
+    items: v.array(v.object({
+      runCode:    v.string(),
+      levelLabel: v.string(),
+      sortOrder:  v.number(),
+    })),
+  },
+  handler: async (ctx, { rondaId, contaminante, items }) => {
+    const now = Date.now()
+    const ids = []
+    for (const item of items) {
+      const id = await ctx.db.insert('rondaPtItems', {
+        rondaId,
+        contaminante,
+        runCode: item.runCode,
+        levelLabel: item.levelLabel,
+        sortOrder: item.sortOrder,
+        createdAt: now,
+      })
+      ids.push(id)
+    }
+    return Promise.all(ids.map((id) => ctx.db.get(id)))
   },
 })
 
@@ -363,7 +427,8 @@ export const createPTSampleGroup = mutation({
     sortOrder:   v.number(),
   },
   handler: async (ctx, { rondaId, sampleGroup, sortOrder }) => {
-    return ctx.db.insert('rondaPtSampleGroups', { rondaId, sampleGroup, sortOrder, createdAt: Date.now() })
+    const id = await ctx.db.insert('rondaPtSampleGroups', { rondaId, sampleGroup, sortOrder, createdAt: Date.now() })
+    return ctx.db.get(id)
   },
 })
 
@@ -374,10 +439,13 @@ export const updateParticipantePT = mutation({
     replicateCode:   v.union(v.number(), v.null()),
   },
   handler: async (ctx, { participanteId, participantCode, replicateCode }) => {
-    await ctx.db.patch(participanteId, {
-      participantCode: participantCode ?? undefined,
-      replicateCode:   replicateCode ?? undefined,
-    })
+    const patch: {
+      participantCode?: string | null
+      replicateCode?: number | null
+    } = {}
+    if (participantCode !== undefined) patch.participantCode = participantCode
+    if (replicateCode !== undefined) patch.replicateCode = replicateCode
+    if (Object.keys(patch).length > 0) await ctx.db.patch(participanteId, patch)
   },
 })
 

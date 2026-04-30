@@ -100,7 +100,7 @@ export const getOrCreateFicha = mutation({
     if (existing) return existing._id
 
     const now = Date.now()
-    return ctx.db.insert('fichasRegistro', {
+    const insertedId = await ctx.db.insert('fichasRegistro', {
       rondaParticipanteId,
       estacionamiento: false,
       decDatosCorrectos: false,
@@ -111,6 +111,8 @@ export const getOrCreateFicha = mutation({
       createdAt: now,
       updatedAt: now,
     })
+    const inserted = await getLatestFichaByRondaParticipante(ctx, rondaParticipanteId)
+    return inserted?._id ?? insertedId
   },
 })
 
@@ -141,8 +143,14 @@ export const upsertFichaScalar = mutation({
     const ficha = await ctx.db.get(fichaId)
     if (!ficha || ficha.estado !== 'borrador') throw new Error('Ficha no editable')
 
-    const value = valueBoolean !== undefined ? valueBoolean : (valueString ?? null)
-    await ctx.db.patch(fichaId, { [field]: value ?? undefined, updatedAt: Date.now() })
+    const hasValue = valueBoolean !== undefined || valueString !== undefined
+    if (!hasValue) {
+      await ctx.db.patch(fichaId, { updatedAt: Date.now() })
+      return
+    }
+
+    const value = valueBoolean !== undefined ? valueBoolean : valueString
+    await ctx.db.patch(fichaId, { [field]: value, updatedAt: Date.now() })
   },
 })
 

@@ -6,6 +6,7 @@ import { revalidatePath } from 'next/cache'
 import { requireAuth, isAdmin } from '@/lib/auth'
 import {
   createPTItem,
+  createPTItemsBulk,
   createPTSampleGroup,
   deletePTItem,
   deletePTSampleGroup,
@@ -134,6 +135,8 @@ export async function createPTItemsBulkAction(formData: FormData) {
     }
 
     const repeatedInInput = new Set<string>()
+    const runsInInput = new Set<string>()
+    const levelsInInput = new Set<string>()
     for (const row of rows) {
       if (!row.runCode || !row.levelLabel) {
         throw new Error('Cada línea debe tener un nivel o el formato run, level.')
@@ -143,6 +146,14 @@ export async function createPTItemsBulkAction(formData: FormData) {
         throw new Error(`La línea ${row.runCode}, ${row.levelLabel} está repetida.`)
       }
       repeatedInInput.add(key)
+      if (runsInInput.has(row.runCode)) {
+        throw new Error(`La corrida ${row.runCode} está repetida para ${contaminante}.`)
+      }
+      runsInInput.add(row.runCode)
+      if (levelsInInput.has(row.levelLabel)) {
+        throw new Error(`El nivel ${row.levelLabel} está repetido para ${contaminante}.`)
+      }
+      levelsInInput.add(row.levelLabel)
     }
 
     await ensureDefaultSampleGroup(rondaId)
@@ -162,11 +173,16 @@ export async function createPTItemsBulkAction(formData: FormData) {
       }
     }
 
-    let sortOrder = Math.max(0, ...existing.map((row) => row.sort_order))
-    for (const row of rows) {
-      sortOrder += 1
-      await createPTItem(rondaId, contaminante, row.runCode, row.levelLabel, sortOrder)
-    }
+    const firstSortOrder = Math.max(0, ...existing.map((row) => row.sort_order)) + 1
+    await createPTItemsBulk(
+      rondaId,
+      contaminante,
+      rows.map((row, index) => ({
+        runCode: row.runCode,
+        levelLabel: row.levelLabel,
+        sortOrder: firstSortOrder + index,
+      }))
+    )
 
     revalidatePath(pageUrl(rondaId))
     revalidatePath(`/dashboard/rondas/${rondaId}`)

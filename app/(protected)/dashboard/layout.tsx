@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 
 import { isAdmin, requireAuth } from '@/lib/auth'
 
-import { Sidebar, MobileNav } from './SidebarNav'
+import { Sidebar } from './SidebarNav'
 
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
   const auth = await requireAuth()

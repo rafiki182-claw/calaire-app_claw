@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 
 import type { Contaminante } from '@/lib/rondas'
 import { createPTItemsBulkAction } from './actions'
@@ -24,7 +24,7 @@ const INITIAL_ROWS: LevelRow[] = [
 
 export function PTLevelsBulkForm({ rondaId, contaminantes }: Props) {
   const [rows, setRows] = useState<LevelRow[]>(INITIAL_ROWS)
-  const [nextId, setNextId] = useState(4)
+  const nextIdRef = useRef(4)
 
   const levelsValue = useMemo(
     () =>
@@ -48,13 +48,14 @@ export function PTLevelsBulkForm({ rondaId, contaminantes }: Props) {
 
   function addRows(count: number) {
     setRows((current) => {
+      const startId = nextIdRef.current
+      nextIdRef.current += count
       const additions = Array.from({ length: count }, (_, index) => {
-        const id = nextId + index
+        const id = startId + index
         return { id, runCode: String(current.length + index + 1), levelLabel: String(current.length + index + 1) }
       })
       return [...current, ...additions]
     })
-    setNextId((current) => current + count)
   }
 
   function removeRow(id: number) {

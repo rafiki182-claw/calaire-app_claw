@@ -150,7 +150,7 @@ export default async function ConfiguracionPTPage({ params, searchParams }: Page
             {canEdit && (
               <PTLevelsBulkForm
                 rondaId={rondaId}
-                contaminantes={ronda.contaminantes.map((c) => c.contaminante)}
+                contaminantes={(ronda.contaminantes ?? []).map((c) => c.contaminante)}
               />
             )}
 

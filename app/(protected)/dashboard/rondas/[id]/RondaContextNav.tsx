@@ -54,13 +54,12 @@ export function RondaContextNav({ rondaId, rondaCodigo, ptConfigurado = true }: 
               key={tab.label}
               href={href}
               aria-current={active ? 'page' : undefined}
-              aria-disabled={disabled ? 'true' : undefined}
               title={disabled ? 'Configure los niveles PT antes de gestionar participantes' : undefined}
               className={`whitespace-nowrap px-4 py-3 text-sm font-medium transition-colors border-b-2 ${
                 active
                   ? 'border-[var(--pt-primary)] text-[var(--foreground)] font-semibold'
-                  : disabled
-                    ? 'border-transparent text-[var(--foreground-muted)] opacity-40 pointer-events-none'
+                : disabled
+                    ? 'border-transparent text-[var(--foreground-muted)] opacity-60'
                   : 'border-transparent text-[var(--foreground-muted)] hover:text-[var(--foreground)] hover:border-[var(--border)]'
               }`}
             >

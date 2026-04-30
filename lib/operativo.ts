@@ -20,6 +20,7 @@ export type KpiMetrica = {
 }
 
 export type AttentionItem = {
+  id: string
   message: string
   href: string
   count: number
@@ -119,6 +120,7 @@ export function buildAttentionItems(
   const rondasSinConfigPT = rondasActivas.filter((r) => r.contaminantes.length === 0)
   if (rondasSinConfigPT.length > 0) {
     items.push({
+      id: 'rondas-sin-config-pt',
       message: `${rondasSinConfigPT.length === 1 ? '1 ronda activa' : `${rondasSinConfigPT.length} rondas activas`} sin configuración PT`,
       href: '/dashboard?tab=rondas',
       count: rondasSinConfigPT.length,
@@ -132,6 +134,7 @@ export function buildAttentionItems(
     .filter((p) => p.estado === 'pendiente').length
   if (enlacesSinReclamar > 0) {
     items.push({
+      id: 'cupos-sin-reclamar',
       message: `${enlacesSinReclamar} ${enlacesSinReclamar === 1 ? 'cupo sin reclamar' : 'cupos sin reclamar'} en rondas activas`,
       href: '/dashboard?tab=participantes',
       count: enlacesSinReclamar,
@@ -145,6 +148,7 @@ export function buildAttentionItems(
     .filter((p) => p.estado !== 'pendiente' && p.ficha_estado !== 'enviado').length
   if (fichasPendientes > 0) {
     items.push({
+      id: 'fichas-pendientes',
       message: `${fichasPendientes} ${fichasPendientes === 1 ? 'ficha pendiente' : 'fichas pendientes'} de envío`,
       href: '/dashboard?tab=participantes',
       count: fichasPendientes,
@@ -156,6 +160,7 @@ export function buildAttentionItems(
   const borrador = rondas.filter((r) => r.estado === 'borrador').length
   if (borrador > 0) {
     items.push({
+      id: 'rondas-en-borrador',
       message: `${borrador} ${borrador === 1 ? 'ronda en borrador' : 'rondas en borrador'} — publicar cuando esté lista`,
       href: '/dashboard?tab=rondas',
       count: borrador,

@@ -10,6 +10,7 @@ const CONTAMINANTES_ORDER = ['CO', 'SO2', 'O3', 'NO', 'NO2'] as const
 const PARTICIPANT_CODE_LENGTH = 6
 const PARTICIPANT_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 const PARTICIPANT_CODE_MAX_ATTEMPTS = 20
+type RondaEstado = 'borrador' | 'activa' | 'cerrada'
 
 function contaminanteIdx(c: string): number {
   return CONTAMINANTES_ORDER.indexOf(c as (typeof CONTAMINANTES_ORDER)[number])
@@ -22,6 +23,13 @@ function generateParticipantCode(): string {
     code += PARTICIPANT_CODE_ALPHABET[idx]
   }
   return code
+}
+
+function assertAllowedEstadoTransition(current: RondaEstado, next: RondaEstado) {
+  if (current === next) return
+  if (current === 'cerrada') throw new Error('Las rondas cerradas no admiten nuevas transiciones.')
+  if (current === 'borrador' && next !== 'activa') throw new Error('Una ronda en borrador solo puede pasar a activa.')
+  if (current === 'activa' && next !== 'cerrada') throw new Error('Una ronda activa solo puede pasar a cerrada.')
 }
 
 async function generateUniqueParticipantCode(
@@ -499,7 +507,6 @@ export const claimParticipanteToken = mutation({
     await ctx.db.patch(slot._id, {
       workosUserId: userId,
       email,
-      invitadoAt: now,
       claimedAt: now,
     })
 
@@ -571,6 +578,9 @@ export const createRonda = mutation({
 export const updateRondaEstado = mutation({
   args: { id: v.id('rondas'), estado: v.union(v.literal('borrador'), v.literal('activa'), v.literal('cerrada')) },
   handler: async (ctx, { id, estado }) => {
+    const ronda = await ctx.db.get(id)
+    if (!ronda) throw new Error('La ronda no existe.')
+    assertAllowedEstadoTransition(ronda.estado, estado)
     await ctx.db.patch(id, { estado })
   },
 })
@@ -607,6 +617,12 @@ export const addParticipante = mutation({
     replicateCode:      v.optional(v.number()),
   },
   handler: async (ctx, { rondaId, workosUserId, email, participantProfile, participantCode, replicateCode }) => {
+    const existing = await ctx.db
+      .query('rondaParticipantes')
+      .withIndex('by_ronda_user', (q) => q.eq('rondaId', rondaId).eq('workosUserId', workosUserId))
+      .unique()
+    if (existing) throw new Error('Este usuario ya esta asignado a esta ronda.')
+
     const assignedParticipantCode = participantCode ?? await generateUniqueParticipantCode(ctx, rondaId)
 
     return ctx.db.insert('rondaParticipantes', {
@@ -708,6 +724,21 @@ export const updateRondaConfig = mutation({
 
     await ctx.db.patch(id, { codigo, nombre })
 
+    const envios = await ctx.db
+      .query('envios')
+      .withIndex('by_ronda', (q) => q.eq('rondaId', id))
+      .first()
+    if (envios) {
+      throw new Error('No se puede modificar la configuracion de contaminantes porque la ronda ya tiene envios.')
+    }
+    const enviosPt = await ctx.db
+      .query('enviosPt')
+      .withIndex('by_ronda', (q) => q.eq('rondaId', id))
+      .first()
+    if (enviosPt) {
+      throw new Error('No se puede modificar la configuracion de contaminantes porque la ronda ya tiene envios PT.')
+    }
+
     const existing = await ctx.db
       .query('rondaContaminantes')
       .withIndex('by_ronda', (q) => q.eq('rondaId', id))
@@ -732,9 +763,7 @@ export const transitionRondaEstado = mutation({
   handler: async (ctx, { id, nextState }) => {
     const ronda = await ctx.db.get(id)
     if (!ronda) throw new Error('La ronda no existe.')
-    if (ronda.estado === 'cerrada') throw new Error('Las rondas cerradas no admiten nuevas transiciones.')
-    if (ronda.estado === 'borrador' && nextState !== 'activa') throw new Error('Una ronda en borrador solo puede pasar a activa.')
-    if (ronda.estado === 'activa' && nextState !== 'cerrada') throw new Error('Una ronda activa solo puede pasar a cerrada.')
+    assertAllowedEstadoTransition(ronda.estado, nextState)
     await ctx.db.patch(id, { estado: nextState })
   },
 })

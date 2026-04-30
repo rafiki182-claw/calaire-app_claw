@@ -19,6 +19,12 @@ export type RondaPTItem = {
   created_at: string
 }
 
+export type RondaPTItemInput = {
+  runCode: string
+  levelLabel: string
+  sortOrder: number
+}
+
 export type RondaPTSampleGroup = {
   id: string
   ronda_id: string
@@ -882,22 +888,47 @@ export async function createPTItem(
   levelLabel: string,
   sortOrder: number
 ): Promise<RondaPTItem> {
-  const id = await fetchMutation(api.pt.createPTItem, {
+  const doc = await fetchMutation(api.pt.createPTItem, {
     rondaId: rondaId as Id<'rondas'>,
     contaminante,
     runCode,
     levelLabel,
     sortOrder,
   })
+  if (!doc) throw new Error('No fue posible recuperar el item PT tras crearlo')
   return {
-    id: id as string,
-    ronda_id: rondaId,
-    contaminante,
-    run_code: runCode,
-    level_label: levelLabel,
-    sort_order: sortOrder,
-    created_at: new Date().toISOString(),
+    id: doc._id as string,
+    ronda_id: doc.rondaId as string,
+    contaminante: doc.contaminante,
+    run_code: doc.runCode,
+    level_label: doc.levelLabel,
+    sort_order: doc.sortOrder,
+    created_at: new Date(doc._creationTime).toISOString(),
   }
+}
+
+export async function createPTItemsBulk(
+  rondaId: string,
+  contaminante: Contaminante,
+  items: RondaPTItemInput[]
+): Promise<RondaPTItem[]> {
+  const docs = await fetchMutation(api.pt.createPTItemsBulk, {
+    rondaId: rondaId as Id<'rondas'>,
+    contaminante,
+    items,
+  })
+  return docs.map((doc) => {
+    if (!doc) throw new Error('No fue posible recuperar un item PT tras crearlo')
+    return {
+      id: doc._id as string,
+      ronda_id: doc.rondaId as string,
+      contaminante: doc.contaminante,
+      run_code: doc.runCode,
+      level_label: doc.levelLabel,
+      sort_order: doc.sortOrder,
+      created_at: new Date(doc._creationTime).toISOString(),
+    }
+  })
 }
 
 export async function createPTSampleGroup(
@@ -905,17 +936,18 @@ export async function createPTSampleGroup(
   sampleGroup: string,
   sortOrder: number
 ): Promise<RondaPTSampleGroup> {
-  const id = await fetchMutation(api.pt.createPTSampleGroup, {
+  const doc = await fetchMutation(api.pt.createPTSampleGroup, {
     rondaId: rondaId as Id<'rondas'>,
     sampleGroup,
     sortOrder,
   })
+  if (!doc) throw new Error('No fue posible recuperar el grupo de muestra PT tras crearlo')
   return {
-    id: id as string,
-    ronda_id: rondaId,
-    sample_group: sampleGroup,
-    sort_order: sortOrder,
-    created_at: new Date().toISOString(),
+    id: doc._id as string,
+    ronda_id: doc.rondaId as string,
+    sample_group: doc.sampleGroup,
+    sort_order: doc.sortOrder,
+    created_at: new Date(doc._creationTime).toISOString(),
   }
 }
 
@@ -946,45 +978,18 @@ export async function deletePTSampleGroup(rondaId: string, groupId: string): Pro
 }
 
 // ---------------------------------------------------------------------------
-// listAllEnviosPT — built from individual queries (not called in current app)
+// listAllEnviosPT
 // ---------------------------------------------------------------------------
 
 export async function listAllEnviosPT(rondaId: string): Promise<EnvioPTWithRelations[]> {
-  const [enviosPT, items, sampleGroups, participantes] = await Promise.all([
-    fetchQuery(api.pt.listEnviosPTRound, { rondaId: rondaId as Id<'rondas'> }).then(() =>
-      // listEnviosPTRound returns filtered/mapped data; use a raw fetch via listResultadosPTRonda
-      // We need raw enviosPt — reconstruct from getEstadoEnvioPTParticipante is not ideal.
-      // Fall back to fetching per participante:
-      fetchQuery(api.pt.listParticipantesPT, { rondaId: rondaId as Id<'rondas'> })
-    ),
-    fetchQuery(api.pt.listPTItems, { rondaId: rondaId as Id<'rondas'> }),
-    fetchQuery(api.pt.listPTSampleGroups, { rondaId: rondaId as Id<'rondas'> }),
-    fetchQuery(api.pt.listParticipantesPT, { rondaId: rondaId as Id<'rondas'> }),
-  ])
+  const rows = await fetchQuery(api.pt.listAllEnviosPT, { rondaId: rondaId as Id<'rondas'> })
 
-  const itemMap = new Map(items.map((i) => [i._id as string, mapPTItemDoc(i)]))
-  const groupMap = new Map(sampleGroups.map((g) => [g._id as string, mapPTSampleGroupDoc(g)]))
-  const participanteMap = new Map(participantes.map((p) => [p._id as string, mapParticipantePTDoc(p)]))
-
-  // Collect all envios by fetching per participante
-  const allEnvios: EnvioPTWithRelations[] = []
-  for (const p of enviosPT) {
-    const envios = await fetchQuery(api.pt.listEnviosPT, {
-      rondaId: rondaId as Id<'rondas'>,
-      userId: (p as { workosUserId: string }).workosUserId,
-    })
-    for (const e of envios) {
-      const mapped = mapEnvioPTDoc(e)
-      const pt_item = itemMap.get(mapped.pt_item_id)
-      const sample_group = groupMap.get(mapped.sample_group_id)
-      const participante = participanteMap.get(mapped.ronda_participante_id)
-      if (pt_item && sample_group && participante) {
-        allEnvios.push({ ...mapped, pt_item, sample_group, participante })
-      }
-    }
-  }
-
-  return allEnvios
+  return rows.map(({ envio, ptItem, sampleGroup, participante }) => ({
+    ...mapEnvioPTDoc(envio),
+    pt_item: mapPTItemDoc(ptItem),
+    sample_group: mapPTSampleGroupDoc(sampleGroup),
+    participante: mapParticipantePTDoc(participante),
+  }))
 }
 
 // ---------------------------------------------------------------------------

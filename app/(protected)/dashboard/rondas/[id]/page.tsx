@@ -60,6 +60,7 @@ function MetricaCard({
   label,
   value,
   total,
+  variant = 'default',
   href,
 }: {
   label: string
@@ -68,6 +69,13 @@ function MetricaCard({
   variant?: 'default' | 'success' | 'warning' | 'danger'
   href?: string
 }) {
+  const variantClass = {
+    default: 'border-l-[var(--pt-primary)]',
+    success: 'border-l-emerald-500 bg-emerald-50/40',
+    warning: 'border-l-amber-500 bg-amber-50/50',
+    danger: 'border-l-rose-500 bg-rose-50/50',
+  }[variant]
+
   const inner = (
     <>
       <div className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--foreground-muted)]">
@@ -84,13 +92,13 @@ function MetricaCard({
 
   if (href) {
     return (
-      <Link href={href} className="card-accent px-5 py-4 transition hover:border-[var(--pt-primary)] hover:shadow-md">
+      <Link href={href} className={`card-accent px-5 py-4 transition hover:border-[var(--pt-primary)] hover:shadow-md ${variantClass}`}>
         {inner}
       </Link>
     )
   }
 
-  return <div className="card-accent px-5 py-4">{inner}</div>
+  return <div className={`card-accent px-5 py-4 ${variantClass}`}>{inner}</div>
 }
 
 // ---------------------------------------------------------------------------

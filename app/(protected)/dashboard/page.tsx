@@ -723,7 +723,7 @@ function AttentionList({ items }: { items: AttentionItem[] }) {
       </h2>
       <ul className="grid gap-1">
         {items.map((item) => (
-          <li key={item.message}>
+          <li key={item.id}>
             <Link
               href={item.href}
               className={`flex items-center justify-between rounded-xl border px-4 py-3 text-sm transition hover:border-[var(--pt-primary)] ${

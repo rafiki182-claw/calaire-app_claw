@@ -11,6 +11,9 @@ importers:
       '@workos-inc/authkit-nextjs':
         specifier: ^3.0.1
         version: 3.0.1(next@16.2.4(@babel/core@7.29.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(typescript@5.9.3)
+      '@workos-inc/node':
+        specifier: 8.13.0
+        version: 8.13.0
       convex:
         specifier: ^1.36.1
         version: 1.36.1(react@19.2.4)
