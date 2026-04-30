@@ -21,10 +21,10 @@ export default async function LoginPage() {
               className="text-2xl font-bold tracking-tight"
               style={{ color: 'var(--foreground)' }}
             >
-              CALAIRE-EA
+              CALAIRE APP
             </h1>
             <p className="text-sm" style={{ color: 'var(--foreground-muted)' }}>
-              Portal de Ensayos de Aptitud
+              Dashboard para Ensayos de Aptitud de Calidad de Aire
             </p>
           </div>
 

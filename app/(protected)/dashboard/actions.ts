@@ -9,10 +9,13 @@ import {
   CONTAMINANTES,
   PENDING_PARTICIPANTE_PREFIX,
   REPLICAS_OPTIONS,
+  createConfiguredRonda,
+  deleteRonda,
+  reabrirRonda,
+  transitionRondaEstado,
+  updateRondaConfig,
   type Contaminante,
-  type EstadoRonda,
 } from '@/lib/rondas'
-import { getSupabaseAdmin } from '@/lib/supabase'
 
 type ConfigContaminante = {
   contaminante: Contaminante
@@ -88,8 +91,11 @@ function buildErrorUrl(message: string) {
   return `/dashboard?error=${encodeURIComponent(message)}`
 }
 
-function buildSuccessUrl(message: string) {
-  return `/dashboard?success=${encodeURIComponent(message)}`
+function buildSuccessUrl(message: string, rondaId?: string) {
+  if (rondaId) {
+    return `/dashboard/rondas/${rondaId}/configuracion-pt?success=${encodeURIComponent(message)}`
+  }
+  return `/dashboard?tab=rondas&success=${encodeURIComponent(message)}`
 }
 
 export async function createRondaAction(formData: FormData) {
@@ -112,68 +118,32 @@ export async function createRondaAction(formData: FormData) {
       throw new Error('El código de la ronda es obligatorio.')
     }
 
-    const { data: ronda, error: rondaError } = await getSupabaseAdmin()
-      .from('rondas')
-      .insert({ nombre, codigo, estado: 'borrador' satisfies EstadoRonda })
-      .select('id')
-      .single()
-
-    if (rondaError || !ronda) {
-      throw new Error(rondaError?.message ?? 'No fue posible crear la ronda.')
-    }
-
-    const { error: configError } = await getSupabaseAdmin()
-      .from('ronda_contaminantes')
-      .insert(
-        contaminantes.map((item) => ({
-          ronda_id: ronda.id,
-          contaminante: item.contaminante,
-          niveles: item.niveles,
-          replicas: item.replicas,
-        }))
-      )
-
-    if (configError) {
-      await getSupabaseAdmin().from('rondas').delete().eq('id', ronda.id)
-      throw new Error(configError.message)
-    }
-
     const slots: Array<{
-      ronda_id: string
-      workos_user_id: string
+      workosUserId: string
       email: string
-      participant_profile: 'member' | 'member_special'
+      participantProfile: 'member' | 'member_special'
     }> = Array.from({ length: participantesPlaneados }, (_, index) => ({
-      ronda_id: ronda.id,
-      workos_user_id: `${PENDING_PARTICIPANTE_PREFIX}${randomBytes(12).toString('hex')}`,
+      workosUserId: `${PENDING_PARTICIPANTE_PREFIX}${randomBytes(12).toString('hex')}`,
       email: `Participante ${String(index + 1).padStart(2, '0')} (pendiente)`,
-      participant_profile: 'member',
+      participantProfile: 'member',
     }))
 
     if (includeReference) {
       slots.push({
-        ronda_id: ronda.id,
-        workos_user_id: `${PENDING_PARTICIPANTE_PREFIX}${randomBytes(12).toString('hex')}`,
+        workosUserId: `${PENDING_PARTICIPANTE_PREFIX}${randomBytes(12).toString('hex')}`,
         email: 'Referencia (pendiente)',
-        participant_profile: 'member_special',
+        participantProfile: 'member_special',
       })
     }
 
-    const { error: participantError } = await getSupabaseAdmin()
-      .from('ronda_participantes')
-      .insert(slots)
-
-    if (participantError) {
-      await getSupabaseAdmin().from('ronda_contaminantes').delete().eq('ronda_id', ronda.id)
-      await getSupabaseAdmin().from('rondas').delete().eq('id', ronda.id)
-      throw new Error(participantError.message)
-    }
+    const rondaId = await createConfiguredRonda(nombre, codigo, contaminantes, slots)
 
     revalidatePath('/dashboard')
     targetUrl = buildSuccessUrl(
       includeReference
-        ? 'Ronda creada con enlaces listos (incluye referencia).'
-        : 'Ronda creada en borrador con enlaces de acceso listos para envío.'
+        ? 'Ronda creada con analitos y enlaces. Configure los niveles PT.'
+        : 'Ronda creada con analitos y participantes. Configure los niveles PT.',
+      rondaId
     )
   } catch (error) {
     const message = error instanceof Error ? error.message : 'No fue posible crear la ronda.'
@@ -202,52 +172,7 @@ export async function updateRondaAction(formData: FormData) {
       throw new Error('Nombre y código son obligatorios.')
     }
 
-    const { data: ronda, error: rondaError } = await getSupabaseAdmin()
-      .from('rondas')
-      .select('id, estado')
-      .eq('id', rondaId)
-      .single()
-
-    if (rondaError || !ronda) {
-      throw new Error('La ronda no existe.')
-    }
-
-    if (ronda.estado !== 'borrador') {
-      throw new Error('Solo se puede editar la configuración de rondas en borrador.')
-    }
-
-    const { error: updateError } = await getSupabaseAdmin()
-      .from('rondas')
-      .update({ nombre, codigo })
-      .eq('id', rondaId)
-
-    if (updateError) {
-      throw new Error(updateError.message)
-    }
-
-    const { error: deleteError } = await getSupabaseAdmin()
-      .from('ronda_contaminantes')
-      .delete()
-      .eq('ronda_id', rondaId)
-
-    if (deleteError) {
-      throw new Error(deleteError.message)
-    }
-
-    const { error: insertError } = await getSupabaseAdmin()
-      .from('ronda_contaminantes')
-      .insert(
-        contaminantes.map((item) => ({
-          ronda_id: rondaId,
-          contaminante: item.contaminante,
-          niveles: item.niveles,
-          replicas: item.replicas,
-        }))
-      )
-
-    if (insertError) {
-      throw new Error(insertError.message)
-    }
+    await updateRondaConfig(rondaId, nombre, codigo, contaminantes)
 
     revalidatePath('/dashboard')
     targetUrl = buildSuccessUrl('Configuración de ronda actualizada.')
@@ -267,42 +192,13 @@ export async function changeRondaStatusAction(formData: FormData) {
 
   try {
     const rondaId = parseText(formData, 'ronda_id')
-    const nextState = parseText(formData, 'next_state') as EstadoRonda
+    const nextState = parseText(formData, 'next_state')
 
     if (!rondaId || !['activa', 'cerrada'].includes(nextState)) {
       throw new Error('La transición solicitada no es válida.')
     }
 
-    const { data: ronda, error: rondaError } = await getSupabaseAdmin()
-      .from('rondas')
-      .select('id, estado')
-      .eq('id', rondaId)
-      .single()
-
-    if (rondaError || !ronda) {
-      throw new Error('La ronda no existe.')
-    }
-
-    if (ronda.estado === 'cerrada') {
-      throw new Error('Las rondas cerradas no admiten nuevas transiciones.')
-    }
-
-    if (ronda.estado === 'borrador' && nextState !== 'activa') {
-      throw new Error('Una ronda en borrador solo puede pasar a activa.')
-    }
-
-    if (ronda.estado === 'activa' && nextState !== 'cerrada') {
-      throw new Error('Una ronda activa solo puede pasar a cerrada.')
-    }
-
-    const { error: updateError } = await getSupabaseAdmin()
-      .from('rondas')
-      .update({ estado: nextState })
-      .eq('id', rondaId)
-
-    if (updateError) {
-      throw new Error(updateError.message)
-    }
+    await transitionRondaEstado(rondaId, nextState as 'activa' | 'cerrada')
 
     revalidatePath('/dashboard')
     targetUrl = buildSuccessUrl(
@@ -328,21 +224,7 @@ export async function reabrirRondaAction(formData: FormData) {
     const rondaId = parseText(formData, 'ronda_id')
     if (!rondaId) throw new Error('No se recibió la ronda.')
 
-    const { data: ronda, error: rondaError } = await getSupabaseAdmin()
-      .from('rondas')
-      .select('id, estado')
-      .eq('id', rondaId)
-      .single()
-
-    if (rondaError || !ronda) throw new Error('La ronda no existe.')
-    if (ronda.estado !== 'cerrada') throw new Error('Solo se pueden reabrir rondas cerradas.')
-
-    const { error: updateError } = await getSupabaseAdmin()
-      .from('rondas')
-      .update({ estado: 'activa' satisfies EstadoRonda })
-      .eq('id', rondaId)
-
-    if (updateError) throw new Error(updateError.message)
+    await reabrirRonda(rondaId)
 
     revalidatePath('/dashboard')
     targetUrl = buildSuccessUrl('Ronda reabierta correctamente.')
@@ -366,27 +248,10 @@ export async function deleteRondaAction(formData: FormData) {
       throw new Error('No se recibió la ronda a eliminar.')
     }
 
-    const { data: ronda, error: rondaError } = await getSupabaseAdmin()
-      .from('rondas')
-      .select('id, nombre')
-      .eq('id', rondaId)
-      .single()
-
-    if (rondaError || !ronda) {
-      throw new Error('La ronda no existe.')
-    }
-
-    const { error: deleteError } = await getSupabaseAdmin()
-      .from('rondas')
-      .delete()
-      .eq('id', rondaId)
-
-    if (deleteError) {
-      throw new Error(deleteError.message)
-    }
+    const nombre = await deleteRonda(rondaId)
 
     revalidatePath('/dashboard')
-    targetUrl = buildSuccessUrl(`Ronda "${ronda.nombre}" eliminada correctamente.`)
+    targetUrl = buildSuccessUrl(`Ronda "${nombre}" eliminada correctamente.`)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'No fue posible eliminar la ronda.'
     targetUrl = buildErrorUrl(message)

@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { query, mutation } from './_generated/server'
+import { query, mutation, MutationCtx, QueryCtx } from './_generated/server'
 import { Doc, Id } from './_generated/dataModel'
 
 // ---------------------------------------------------------------------------
@@ -7,9 +7,58 @@ import { Doc, Id } from './_generated/dataModel'
 // ---------------------------------------------------------------------------
 const PENDING_PREFIX = 'pendiente:'
 const CONTAMINANTES_ORDER = ['CO', 'SO2', 'O3', 'NO', 'NO2'] as const
+const PARTICIPANT_CODE_LENGTH = 6
+const PARTICIPANT_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+const PARTICIPANT_CODE_MAX_ATTEMPTS = 20
 
 function contaminanteIdx(c: string): number {
   return CONTAMINANTES_ORDER.indexOf(c as (typeof CONTAMINANTES_ORDER)[number])
+}
+
+function generateParticipantCode(): string {
+  let code = ''
+  for (let i = 0; i < PARTICIPANT_CODE_LENGTH; i += 1) {
+    const idx = Math.floor(Math.random() * PARTICIPANT_CODE_ALPHABET.length)
+    code += PARTICIPANT_CODE_ALPHABET[idx]
+  }
+  return code
+}
+
+async function generateUniqueParticipantCode(
+  ctx: MutationCtx,
+  rondaId: Id<'rondas'>
+): Promise<string> {
+  const existingCodes = new Set<string>()
+  const participantes = ctx.db
+    .query('rondaParticipantes')
+    .withIndex('by_ronda', (q) => q.eq('rondaId', rondaId))
+
+  for await (const participante of participantes) {
+    if (participante.participantCode) {
+      existingCodes.add(participante.participantCode)
+    }
+  }
+
+  for (let attempt = 0; attempt < PARTICIPANT_CODE_MAX_ATTEMPTS; attempt += 1) {
+    const code = generateParticipantCode()
+    if (!existingCodes.has(code)) {
+      return code
+    }
+  }
+
+  throw new Error('No se pudo generar un codigo de participante unico para esta ronda.')
+}
+
+async function getLatestFichaByRondaParticipante(
+  ctx: QueryCtx,
+  rondaParticipanteId: Id<'rondaParticipantes'>
+): Promise<Doc<'fichasRegistro'> | null> {
+  const fichas = await ctx.db
+    .query('fichasRegistro')
+    .withIndex('by_ronda_participante', (q) => q.eq('rondaParticipanteId', rondaParticipanteId))
+    .collect()
+  fichas.sort((a, b) => b.updatedAt - a.updatedAt)
+  return fichas[0] ?? null
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +162,52 @@ export const listParticipantes = query({
   },
 })
 
+export const listParticipantesRondaResumen = query({
+  args: { rondaId: v.id('rondas') },
+  handler: async (ctx, { rondaId }) => {
+    const rows = await ctx.db
+      .query('rondaParticipantes')
+      .withIndex('by_ronda', (q) => q.eq('rondaId', rondaId))
+      .collect()
+    rows.sort((a, b) => a.invitadoAt - b.invitadoAt)
+
+    const enviosPt = await ctx.db
+      .query('enviosPt')
+      .withIndex('by_ronda', (q) => q.eq('rondaId', rondaId))
+      .collect()
+
+    const enviosPtCount = new Map<string, number>()
+    for (const envio of enviosPt) {
+      const key = envio.rondaParticipanteId
+      enviosPtCount.set(key, (enviosPtCount.get(key) ?? 0) + 1)
+    }
+
+    return Promise.all(
+      rows.map(async (p) => {
+        const ficha = await getLatestFichaByRondaParticipante(ctx, p._id)
+        const workosUserId = p.workosUserId ?? ''
+        const pendiente = workosUserId.startsWith(PENDING_PREFIX)
+
+        return {
+          ronda_participante_id: p._id,
+          ronda_id: p.rondaId,
+          email: p.email ?? '',
+          workos_user_id: pendiente ? null : workosUserId,
+          participant_profile: p.participantProfile ?? 'member',
+          participant_code: p.participantCode ?? null,
+          replicate_code: p.replicateCode ?? null,
+          estado: pendiente ? 'pendiente' : 'reclamado',
+          slot_token: pendiente ? workosUserId.slice(PENDING_PREFIX.length) : null,
+          claimed_at: p.claimedAt ? new Date(p.claimedAt).toISOString() : null,
+          invitado_at: new Date(p.invitadoAt).toISOString(),
+          ficha_estado: ficha ? ficha.estado : 'no_iniciada',
+          envios_pt_count: enviosPtCount.get(p._id) ?? 0,
+        }
+      })
+    )
+  },
+})
+
 export const listRondasParticipante = query({
   args: { userId: v.string() },
   handler: async (ctx, { userId }) => {
@@ -133,10 +228,7 @@ export const listRondasParticipante = query({
           .collect()
         contaminantes.sort((a, b) => contaminanteIdx(a.contaminante) - contaminanteIdx(b.contaminante))
 
-        const ficha = await ctx.db
-          .query('fichasRegistro')
-          .withIndex('by_ronda_participante', (q) => q.eq('rondaParticipanteId', rp._id))
-          .unique()
+        const ficha = await getLatestFichaByRondaParticipante(ctx, rp._id)
 
         const fichaEstado: 'no_iniciada' | 'borrador' | 'enviado' =
           ficha ? (ficha.estado as 'borrador' | 'enviado') : 'no_iniciada'
@@ -384,7 +476,6 @@ export const claimParticipanteToken = mutation({
     token:     v.string(),
     userId:    v.string(),
     email:     v.string(),
-    role:      v.optional(v.union(v.string(), v.null())),
   },
   handler: async (ctx, { rondaId, token, userId, email }) => {
     const normalizedToken = token.trim()
@@ -404,6 +495,7 @@ export const claimParticipanteToken = mutation({
     if (!slot) return 'invalid' as const
 
     const now = Date.now()
+    // Preserve participantCode when a pending slot is claimed.
     await ctx.db.patch(slot._id, {
       workosUserId: userId,
       email,
@@ -466,6 +558,12 @@ export const createRonda = mutation({
     estado:  v.union(v.literal('borrador'), v.literal('activa'), v.literal('cerrada')),
   },
   handler: async (ctx, { codigo, nombre, estado }) => {
+    const existing = await ctx.db
+      .query('rondas')
+      .withIndex('by_codigo', (q) => q.eq('codigo', codigo))
+      .first()
+    if (existing) throw new Error('Ya existe una ronda con ese codigo.')
+
     return ctx.db.insert('rondas', { codigo, nombre, estado, createdAt: Date.now() })
   },
 })
@@ -509,13 +607,325 @@ export const addParticipante = mutation({
     replicateCode:      v.optional(v.number()),
   },
   handler: async (ctx, { rondaId, workosUserId, email, participantProfile, participantCode, replicateCode }) => {
+    const assignedParticipantCode = participantCode ?? await generateUniqueParticipantCode(ctx, rondaId)
+
+    return ctx.db.insert('rondaParticipantes', {
+      rondaId,
+      workosUserId,
+      email,
+      participantProfile,
+      participantCode: assignedParticipantCode,
+      replicateCode,
+      invitadoAt: Date.now(),
+    })
+  },
+})
+
+export const createConfiguredRonda = mutation({
+  args: {
+    codigo: v.string(),
+    nombre: v.string(),
+    contaminantes: v.array(v.object({
+      contaminante: v.union(
+        v.literal('CO'), v.literal('SO2'), v.literal('O3'), v.literal('NO'), v.literal('NO2')
+      ),
+      niveles: v.number(),
+      replicas: v.union(v.literal(2), v.literal(3)),
+    })),
+    slots: v.array(v.object({
+      workosUserId: v.string(),
+      email: v.string(),
+      participantProfile: v.union(v.literal('member'), v.literal('member_special')),
+    })),
+  },
+  handler: async (ctx, { codigo, nombre, contaminantes, slots }) => {
+    const existing = await ctx.db
+      .query('rondas')
+      .withIndex('by_codigo', (q) => q.eq('codigo', codigo))
+      .first()
+    if (existing) throw new Error('Ya existe una ronda con ese codigo.')
+
+    const now = Date.now()
+    const rondaId = await ctx.db.insert('rondas', { codigo, nombre, estado: 'borrador', createdAt: now })
+
+    await ctx.db.insert('rondaPtSampleGroups', {
+      rondaId,
+      sampleGroup: 'A',
+      sortOrder: 1,
+      createdAt: now,
+    })
+
+    await Promise.all(contaminantes.map((item) =>
+      ctx.db.insert('rondaContaminantes', {
+        rondaId,
+        contaminante: item.contaminante,
+        niveles: item.niveles,
+        replicas: item.replicas,
+      })
+    ))
+
+    for (const slot of slots) {
+      const participantCode = await generateUniqueParticipantCode(ctx, rondaId)
+      await ctx.db.insert('rondaParticipantes', {
+        rondaId,
+        workosUserId: slot.workosUserId,
+        email: slot.email,
+        participantProfile: slot.participantProfile,
+        participantCode,
+        invitadoAt: now,
+      })
+    }
+
+    return rondaId
+  },
+})
+
+export const updateRondaConfig = mutation({
+  args: {
+    id: v.id('rondas'),
+    codigo: v.string(),
+    nombre: v.string(),
+    contaminantes: v.array(v.object({
+      contaminante: v.union(
+        v.literal('CO'), v.literal('SO2'), v.literal('O3'), v.literal('NO'), v.literal('NO2')
+      ),
+      niveles: v.number(),
+      replicas: v.union(v.literal(2), v.literal(3)),
+    })),
+  },
+  handler: async (ctx, { id, codigo, nombre, contaminantes }) => {
+    const ronda = await ctx.db.get(id)
+    if (!ronda) throw new Error('La ronda no existe.')
+    if (ronda.estado === 'cerrada') {
+      throw new Error('No se puede editar una ronda cerrada.')
+    }
+
+    const sameCode = await ctx.db
+      .query('rondas')
+      .withIndex('by_codigo', (q) => q.eq('codigo', codigo))
+      .first()
+    if (sameCode && sameCode._id !== id) throw new Error('Ya existe una ronda con ese codigo.')
+
+    await ctx.db.patch(id, { codigo, nombre })
+
+    const existing = await ctx.db
+      .query('rondaContaminantes')
+      .withIndex('by_ronda', (q) => q.eq('rondaId', id))
+      .collect()
+    await Promise.all(existing.map((row) => ctx.db.delete(row._id)))
+    await Promise.all(contaminantes.map((item) =>
+      ctx.db.insert('rondaContaminantes', {
+        rondaId: id,
+        contaminante: item.contaminante,
+        niveles: item.niveles,
+        replicas: item.replicas,
+      })
+    ))
+  },
+})
+
+export const transitionRondaEstado = mutation({
+  args: {
+    id: v.id('rondas'),
+    nextState: v.union(v.literal('activa'), v.literal('cerrada')),
+  },
+  handler: async (ctx, { id, nextState }) => {
+    const ronda = await ctx.db.get(id)
+    if (!ronda) throw new Error('La ronda no existe.')
+    if (ronda.estado === 'cerrada') throw new Error('Las rondas cerradas no admiten nuevas transiciones.')
+    if (ronda.estado === 'borrador' && nextState !== 'activa') throw new Error('Una ronda en borrador solo puede pasar a activa.')
+    if (ronda.estado === 'activa' && nextState !== 'cerrada') throw new Error('Una ronda activa solo puede pasar a cerrada.')
+    await ctx.db.patch(id, { estado: nextState })
+  },
+})
+
+export const reabrirRonda = mutation({
+  args: { id: v.id('rondas') },
+  handler: async (ctx, { id }) => {
+    const ronda = await ctx.db.get(id)
+    if (!ronda) throw new Error('La ronda no existe.')
+    if (ronda.estado !== 'cerrada') throw new Error('Solo se pueden reabrir rondas cerradas.')
+    await ctx.db.patch(id, { estado: 'activa' })
+  },
+})
+
+export const deleteRonda = mutation({
+  args: { id: v.id('rondas') },
+  handler: async (ctx, { id }) => {
+    const ronda = await ctx.db.get(id)
+    if (!ronda) throw new Error('La ronda no existe.')
+
+    const participantes = await ctx.db
+      .query('rondaParticipantes')
+      .withIndex('by_ronda', (q) => q.eq('rondaId', id))
+      .collect()
+
+    for (const participante of participantes) {
+      const fichas = await ctx.db
+        .query('fichasRegistro')
+        .withIndex('by_ronda_participante', (q) => q.eq('rondaParticipanteId', participante._id))
+        .collect()
+      for (const ficha of fichas) {
+        const [acompanantes, analizadores, instrumentos] = await Promise.all([
+          ctx.db.query('fichasAcompanantes').withIndex('by_ficha', (q) => q.eq('fichaId', ficha._id)).collect(),
+          ctx.db.query('fichasAnalizadores').withIndex('by_ficha', (q) => q.eq('fichaId', ficha._id)).collect(),
+          ctx.db.query('fichasInstrumentos').withIndex('by_ficha', (q) => q.eq('fichaId', ficha._id)).collect(),
+        ])
+        await Promise.all([
+          ...acompanantes.map((row) => ctx.db.delete(row._id)),
+          ...analizadores.map((row) => ctx.db.delete(row._id)),
+          ...instrumentos.map((row) => ctx.db.delete(row._id)),
+        ])
+        await ctx.db.delete(ficha._id)
+      }
+    }
+
+    const [contaminantes, ptItems, sampleGroups, envios, enviosPt] = await Promise.all([
+      ctx.db.query('rondaContaminantes').withIndex('by_ronda', (q) => q.eq('rondaId', id)).collect(),
+      ctx.db.query('rondaPtItems').withIndex('by_ronda', (q) => q.eq('rondaId', id)).collect(),
+      ctx.db.query('rondaPtSampleGroups').withIndex('by_ronda', (q) => q.eq('rondaId', id)).collect(),
+      ctx.db.query('envios').withIndex('by_ronda', (q) => q.eq('rondaId', id)).collect(),
+      ctx.db.query('enviosPt').withIndex('by_ronda', (q) => q.eq('rondaId', id)).collect(),
+    ])
+
+    await Promise.all([
+      ...enviosPt.map((row) => ctx.db.delete(row._id)),
+      ...envios.map((row) => ctx.db.delete(row._id)),
+      ...sampleGroups.map((row) => ctx.db.delete(row._id)),
+      ...ptItems.map((row) => ctx.db.delete(row._id)),
+      ...contaminantes.map((row) => ctx.db.delete(row._id)),
+      ...participantes.map((row) => ctx.db.delete(row._id)),
+    ])
+
+    await ctx.db.delete(id)
+    return ronda.nombre
+  },
+})
+
+export const assignParticipante = mutation({
+  args: {
+    rondaId: v.id('rondas'),
+    workosUserId: v.string(),
+    email: v.string(),
+    participantProfile: v.union(v.literal('member'), v.literal('member_special')),
+  },
+  handler: async (ctx, { rondaId, workosUserId, email, participantProfile }) => {
+    const ronda = await ctx.db.get(rondaId)
+    if (!ronda) throw new Error('La ronda no existe.')
+    if (ronda.estado === 'cerrada') throw new Error('No se puede asignar participantes a una ronda cerrada.')
+
+    const existing = await ctx.db
+      .query('rondaParticipantes')
+      .withIndex('by_ronda_user', (q) => q.eq('rondaId', rondaId).eq('workosUserId', workosUserId))
+      .first()
+    if (existing) throw new Error('Este usuario ya esta asignado a esta ronda.')
+
+    const participantCode = await generateUniqueParticipantCode(ctx, rondaId)
+
     return ctx.db.insert('rondaParticipantes', {
       rondaId,
       workosUserId,
       email,
       participantProfile,
       participantCode,
-      replicateCode,
+      invitadoAt: Date.now(),
+    })
+  },
+})
+
+export const regenerateParticipanteSlot = mutation({
+  args: {
+    rondaId: v.id('rondas'),
+    participanteId: v.id('rondaParticipantes'),
+    workosUserId: v.string(),
+    email: v.string(),
+  },
+  handler: async (ctx, { rondaId, participanteId, workosUserId, email }) => {
+    const ronda = await ctx.db.get(rondaId)
+    if (!ronda) throw new Error('La ronda no existe.')
+    if (ronda.estado === 'cerrada') throw new Error('No se puede modificar una ronda cerrada.')
+
+    const participante = await ctx.db.get(participanteId)
+    if (!participante || participante.rondaId !== rondaId) throw new Error('No se encontro el participante a regenerar.')
+
+    // Preserve participantCode when regenerating the invitation link.
+    await ctx.db.patch(participanteId, {
+      workosUserId,
+      email,
+      claimedAt: undefined,
+      invitadoAt: Date.now(),
+    })
+  },
+})
+
+export const removeParticipante = mutation({
+  args: { rondaId: v.id('rondas'), participanteId: v.id('rondaParticipantes') },
+  handler: async (ctx, { rondaId, participanteId }) => {
+    const ronda = await ctx.db.get(rondaId)
+    if (!ronda) throw new Error('La ronda no existe.')
+    if (ronda.estado === 'cerrada') throw new Error('No se puede modificar la lista de una ronda cerrada.')
+
+    const participante = await ctx.db.get(participanteId)
+    if (!participante || participante.rondaId !== rondaId) throw new Error('No se encontro el participante.')
+
+    const enviosPt = await ctx.db
+      .query('enviosPt')
+      .withIndex('by_participante', (q) => q.eq('rondaParticipanteId', participanteId))
+      .collect()
+    const envios = await ctx.db
+      .query('envios')
+      .withIndex('by_ronda_user', (q) => q.eq('rondaId', rondaId).eq('workosUserId', participante.workosUserId))
+      .collect()
+    const fichas = await ctx.db
+      .query('fichasRegistro')
+      .withIndex('by_ronda_participante', (q) => q.eq('rondaParticipanteId', participanteId))
+      .collect()
+
+    for (const ficha of fichas) {
+      const [acompanantes, analizadores, instrumentos] = await Promise.all([
+        ctx.db.query('fichasAcompanantes').withIndex('by_ficha', (q) => q.eq('fichaId', ficha._id)).collect(),
+        ctx.db.query('fichasAnalizadores').withIndex('by_ficha', (q) => q.eq('fichaId', ficha._id)).collect(),
+        ctx.db.query('fichasInstrumentos').withIndex('by_ficha', (q) => q.eq('fichaId', ficha._id)).collect(),
+      ])
+      await Promise.all([
+        ...acompanantes.map((row) => ctx.db.delete(row._id)),
+        ...analizadores.map((row) => ctx.db.delete(row._id)),
+        ...instrumentos.map((row) => ctx.db.delete(row._id)),
+      ])
+      await ctx.db.delete(ficha._id)
+    }
+
+    await Promise.all([
+      ...enviosPt.map((row) => ctx.db.delete(row._id)),
+      ...envios.map((row) => ctx.db.delete(row._id)),
+    ])
+    await ctx.db.delete(participanteId)
+  },
+})
+
+export const addReferenceSlot = mutation({
+  args: { rondaId: v.id('rondas'), workosUserId: v.string(), email: v.string() },
+  handler: async (ctx, { rondaId, workosUserId, email }) => {
+    const ronda = await ctx.db.get(rondaId)
+    if (!ronda) throw new Error('La ronda no existe.')
+    if (ronda.estado === 'cerrada') throw new Error('No se puede modificar una ronda cerrada.')
+
+    const participantes = await ctx.db
+      .query('rondaParticipantes')
+      .withIndex('by_ronda', (q) => q.eq('rondaId', rondaId))
+      .collect()
+    if (participantes.some((p) => p.participantProfile === 'member_special')) {
+      throw new Error('Esta ronda ya tiene un enlace de referencia.')
+    }
+
+    const participantCode = await generateUniqueParticipantCode(ctx, rondaId)
+
+    return ctx.db.insert('rondaParticipantes', {
+      rondaId,
+      workosUserId,
+      email,
+      participantProfile: 'member_special',
+      participantCode,
       invitadoAt: Date.now(),
     })
   },

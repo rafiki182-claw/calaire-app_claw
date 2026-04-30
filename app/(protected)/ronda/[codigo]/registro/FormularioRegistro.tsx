@@ -1,11 +1,14 @@
 'use client'
 
 import { useState, useCallback } from 'react'
+import Link from 'next/link'
 import type { FichaCompleta, AcompananteInput, AnalizadorInput, InstrumentoInput } from '@/lib/fichas'
+import type { EstadoRonda } from '@/lib/rondas'
 import {
   guardarCampoFichaAction,
   guardarListasAction,
   enviarFichaFinalAction,
+  cerrarSesionParticipanteAction,
 } from './actions'
 
 const ANALITOS = ['CO', 'SO2', 'O3', 'NO', 'NO2'] as const
@@ -13,6 +16,7 @@ const ANALITOS = ['CO', 'SO2', 'O3', 'NO', 'NO2'] as const
 type Props = {
   codigoRonda: string
   rondaCodigo: string
+  rondaEstado: EstadoRonda
   participanteCodigo: string | null
   ficha: FichaCompleta
   soloLectura: boolean
@@ -36,7 +40,7 @@ function SectionHeader({ title, description }: { title: string; description?: st
   )
 }
 
-export default function FormularioRegistro({ codigoRonda, rondaCodigo, participanteCodigo, ficha: fichaInicial, soloLectura }: Props) {
+export default function FormularioRegistro({ codigoRonda, rondaCodigo, rondaEstado, participanteCodigo, ficha: fichaInicial, soloLectura }: Props) {
   const [fieldStates, setFieldStates] = useState<Record<string, SaveState>>({})
 
   // Dynamic lists
@@ -66,6 +70,7 @@ export default function FormularioRegistro({ codigoRonda, rondaCodigo, participa
   const [enviado, setEnviado] = useState(fichaInicial.estado === 'enviado')
 
   const disabled = soloLectura || enviado
+  const puedeCargarDatos = rondaEstado === 'activa' && enviado
 
   const handleBlur = useCallback(
     async (field: string, value: string) => {
@@ -121,25 +126,50 @@ export default function FormularioRegistro({ codigoRonda, rondaCodigo, participa
 
         {/* Encabezado */}
         <header className="header-bar px-6 py-5">
-          <div className="space-y-1">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--foreground-muted)]">
-              F-PSEA-05A v0.1
-            </p>
-            <h1 className="text-xl font-semibold text-[var(--foreground)]">
-              Hoja de Registro del Participante
-            </h1>
-            <div className="flex flex-wrap gap-4 text-sm text-[var(--foreground-muted)]">
-              <span>Ronda: <strong className="text-[var(--foreground)]">{rondaCodigo}</strong></span>
-              {participanteCodigo && (
-                <span>Participante: <strong className="text-[var(--foreground)]">{participanteCodigo}</strong></span>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="space-y-1">
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--foreground-muted)]">
+                F-PSEA-05A v0.1
+              </p>
+              <h1 className="text-xl font-semibold text-[var(--foreground)]">
+                Hoja de Registro del Participante
+              </h1>
+              <div className="flex flex-wrap gap-4 text-sm text-[var(--foreground-muted)]">
+                <span>Ronda: <strong className="text-[var(--foreground)]">{rondaCodigo}</strong></span>
+                {participanteCodigo && (
+                  <span>Participante: <strong className="text-[var(--foreground)]">{participanteCodigo}</strong></span>
+                )}
+              </div>
+              {enviado && (
+                <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-emerald-100 px-4 py-1.5 text-sm font-semibold text-emerald-800">
+                  Ficha enviada ✓
+                </div>
               )}
             </div>
-          </div>
-          {enviado && (
-            <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-emerald-100 px-4 py-1.5 text-sm font-semibold text-emerald-800">
-              Ficha enviada ✓
+
+            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+              <Link href="/dashboard" className="btn-outline">
+                Volver
+              </Link>
+              {puedeCargarDatos ? (
+                <Link href={`/ronda/${codigoRonda}`} className="btn-primary">
+                  Cargar datos →
+                </Link>
+              ) : (
+                <span
+                  className="rounded-lg border border-[var(--border)] bg-[var(--surface-muted)] px-4 py-2 text-sm font-semibold text-[var(--foreground-muted)]"
+                  title={enviado ? 'La carga se habilita cuando la ronda esté activa.' : 'Envíe la ficha para habilitar la carga de datos.'}
+                >
+                  Cargar datos
+                </span>
+              )}
+              <form action={cerrarSesionParticipanteAction}>
+                <button type="submit" className="btn-outline">
+                  Cerrar sesión
+                </button>
+              </form>
             </div>
-          )}
+          </div>
         </header>
 
         {/* Sección 2: Datos del participante */}

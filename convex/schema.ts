@@ -102,7 +102,7 @@ export default defineSchema({
     .index('by_ronda',              ['rondaId'])
     .index('by_participante',       ['rondaParticipanteId'])
     .index('by_pt_item',            ['ptItemId'])
-    // índice compuesto para el upsert (equivale al UNIQUE constraint de SQL)
+    // índice compuesto para buscar antes de insertar; no es un UNIQUE constraint.
     .index('by_participante_item_group', ['rondaParticipanteId', 'ptItemId', 'sampleGroupId']),
 
   // -------------------------------------------------------------------------
@@ -122,7 +122,7 @@ export default defineSchema({
     .index('by_ronda',          ['rondaId'])
     .index('by_user',           ['workosUserId'])
     .index('by_ronda_user',     ['rondaId', 'workosUserId'])
-    // índice compuesto para el upsert (equivale al UNIQUE constraint de SQL)
+    // índice compuesto para buscar antes de insertar; no es un UNIQUE constraint.
     .index('by_ronda_user_cont_nivel', ['rondaId', 'workosUserId', 'contaminante', 'nivel']),
 
   // -------------------------------------------------------------------------

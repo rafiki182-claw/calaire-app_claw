@@ -11,6 +11,7 @@ import {
   listPTSampleGroups,
 } from '@/lib/rondas'
 import { isAdmin } from '@/lib/auth'
+import { getFichaByRondaParticipante } from '@/lib/fichas'
 import FormularioRonda from './FormularioRonda'
 import FormularioReferencia from './FormularioReferencia'
 
@@ -40,11 +41,14 @@ export default async function RondaPage({
         ronda.id,
         token,
         auth.user.id,
-        auth.user.email,
-        auth.role ?? null
+        auth.user.email
       )
       if (claim === 'claimed' || claim === 'already-assigned') {
-        redirect(`/ronda/${codigo}`)
+        redirect(
+          `/dashboard?success=${encodeURIComponent(
+            'Invitación aceptada. Complete la ficha antes de ingresar datos.'
+          )}`
+        )
       }
 
     }
@@ -81,6 +85,25 @@ export default async function RondaPage({
           </div>
         </div>
       )
+    }
+
+    const participantePT = await getRondaParticipantePT(ronda.id, auth.user.id)
+    if (!participantePT) {
+      return (
+        <div className="min-h-screen bg-gray-50 flex items-center justify-center px-6">
+          <div className="bg-white rounded-xl shadow p-10 text-center max-w-md">
+            <h2 className="text-lg font-semibold text-gray-800 mb-2">Sin asignación</h2>
+            <p className="text-gray-500 text-sm">
+              No tiene una asignación en esta ronda para ingresar resultados.
+            </p>
+          </div>
+        </div>
+      )
+    }
+
+    const ficha = await getFichaByRondaParticipante(participantePT.id)
+    if (ficha?.estado !== 'enviado') {
+      redirect(`/ronda/${codigo}/registro`)
     }
   }
 

@@ -40,6 +40,9 @@ yarn-error.log*
 .codex
 .claude/
 
+# migration outputs
+scripts/.migration-state.json
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

@@ -9,6 +9,7 @@
  */
 
 import type * as fichas from "../fichas.js";
+import type * as migrations from "../migrations.js";
 import type * as pt from "../pt.js";
 import type * as rondas from "../rondas.js";
 
@@ -20,6 +21,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   fichas: typeof fichas;
+  migrations: typeof migrations;
   pt: typeof pt;
   rondas: typeof rondas;
 }>;

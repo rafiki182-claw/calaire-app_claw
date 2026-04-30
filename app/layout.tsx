@@ -16,8 +16,8 @@ const jetbrainsMono = JetBrains_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'CALAIRE-EA',
-  description: 'Portal de Ensayos de Aptitud para rondas y participantes',
+  title: 'CALAIRE APP',
+  description: 'Dashboard para Ensayos de Aptitud de Calidad de Aire',
 }
 
 export default function RootLayout({

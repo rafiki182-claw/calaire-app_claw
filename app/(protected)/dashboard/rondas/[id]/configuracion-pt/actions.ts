@@ -4,8 +4,16 @@ import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 
 import { requireAuth, isAdmin } from '@/lib/auth'
-import { getSupabaseAdmin } from '@/lib/supabase'
-import { createPTItem, createPTSampleGroup, updateParticipantePT, type Contaminante } from '@/lib/rondas'
+import {
+  createPTItem,
+  createPTSampleGroup,
+  deletePTItem,
+  deletePTSampleGroup,
+  listPTItems,
+  listPTSampleGroups,
+  updateParticipantePT,
+  type Contaminante,
+} from '@/lib/rondas'
 import { CONTAMINANTES } from '@/lib/rondas'
 
 function pageUrl(rondaId: string) {
@@ -35,6 +43,15 @@ function parseNumber(formData: FormData, key: string) {
   return val ? parseInt(val, 10) : null
 }
 
+async function ensureDefaultSampleGroup(rondaId: string) {
+  const existing = await listPTSampleGroups(rondaId)
+  const found = existing.find((row) => row.sample_group === 'A')
+  if (found) return found
+
+  const sortOrder = Math.max(0, ...existing.map((row) => row.sort_order)) + 1
+  return createPTSampleGroup(rondaId, 'A', sortOrder)
+}
+
 export async function createPTItemAction(formData: FormData) {
   await requireAdmin()
 
@@ -57,12 +74,11 @@ export async function createPTItemAction(formData: FormData) {
       throw new Error('El código de corrida y el nivel son obligatorios.')
     }
 
-    const { data: existing, error: existingError } = await getSupabaseAdmin()
-      .from('ronda_pt_items')
-      .select('run_code, level_label')
-      .eq('ronda_id', rondaId)
-      .eq('contaminante', contaminante)
-    if (existingError) throw new Error(existingError.message)
+    await ensureDefaultSampleGroup(rondaId)
+
+    const existing = (await listPTItems(rondaId)).filter(
+      (row) => row.contaminante === contaminante
+    )
 
     if ((existing ?? []).some((row) => row.run_code === runCode)) {
       throw new Error('Ya existe una corrida PT con ese código (run) para este contaminante.')
@@ -72,15 +88,7 @@ export async function createPTItemAction(formData: FormData) {
       throw new Error('Ya existe una corrida PT con ese nivel (level) para este contaminante.')
     }
 
-    const maxOrderResult = await getSupabaseAdmin()
-      .from('ronda_pt_items')
-      .select('sort_order')
-      .eq('ronda_id', rondaId)
-      .order('sort_order', { ascending: false })
-      .limit(1)
-      .single()
-
-    const sortOrder = (maxOrderResult.data?.sort_order ?? 0) + 1
+    const sortOrder = Math.max(0, ...existing.map((row) => row.sort_order)) + 1
 
     await createPTItem(rondaId, contaminante, runCode, levelLabel, sortOrder)
 
@@ -88,6 +96,83 @@ export async function createPTItemAction(formData: FormData) {
     targetUrl = successUrl(rondaId, 'Item PT creado correctamente.')
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Error al crear el item PT.'
+    targetUrl = errorUrl(rondaId, msg)
+  }
+
+  redirect(targetUrl)
+}
+
+export async function createPTItemsBulkAction(formData: FormData) {
+  await requireAdmin()
+
+  const rondaId = parseText(formData, 'ronda_id')
+  const contaminante = parseText(formData, 'contaminante') as Contaminante
+  const rawLevels = parseText(formData, 'levels')
+  let targetUrl = errorUrl(rondaId, 'Error al crear los niveles PT.')
+
+  try {
+    if (!rondaId || !contaminante || !rawLevels) {
+      throw new Error('Seleccione un contaminante y escriba al menos un nivel.')
+    }
+
+    if (!CONTAMINANTES.includes(contaminante)) {
+      throw new Error('Contaminante inválido.')
+    }
+
+    const rows = rawLevels
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const parts = line.split(/[,\t;|]/).map((part) => part.trim()).filter(Boolean)
+        if (parts.length === 1) return { runCode: parts[0], levelLabel: parts[0] }
+        return { runCode: parts[0], levelLabel: parts[1] }
+      })
+
+    if (rows.length === 0) {
+      throw new Error('Escriba al menos un nivel.')
+    }
+
+    const repeatedInInput = new Set<string>()
+    for (const row of rows) {
+      if (!row.runCode || !row.levelLabel) {
+        throw new Error('Cada línea debe tener un nivel o el formato run, level.')
+      }
+      const key = `${row.runCode}::${row.levelLabel}`
+      if (repeatedInInput.has(key)) {
+        throw new Error(`La línea ${row.runCode}, ${row.levelLabel} está repetida.`)
+      }
+      repeatedInInput.add(key)
+    }
+
+    await ensureDefaultSampleGroup(rondaId)
+
+    const existing = (await listPTItems(rondaId)).filter(
+      (row) => row.contaminante === contaminante
+    )
+    const existingRuns = new Set(existing.map((row) => row.run_code))
+    const existingLevels = new Set(existing.map((row) => row.level_label))
+
+    for (const row of rows) {
+      if (existingRuns.has(row.runCode)) {
+        throw new Error(`Ya existe la corrida ${row.runCode} para ${contaminante}.`)
+      }
+      if (existingLevels.has(row.levelLabel)) {
+        throw new Error(`Ya existe el nivel ${row.levelLabel} para ${contaminante}.`)
+      }
+    }
+
+    let sortOrder = Math.max(0, ...existing.map((row) => row.sort_order))
+    for (const row of rows) {
+      sortOrder += 1
+      await createPTItem(rondaId, contaminante, row.runCode, row.levelLabel, sortOrder)
+    }
+
+    revalidatePath(pageUrl(rondaId))
+    revalidatePath(`/dashboard/rondas/${rondaId}`)
+    targetUrl = successUrl(rondaId, `${rows.length} nivel${rows.length !== 1 ? 'es' : ''} PT creado${rows.length !== 1 ? 's' : ''}.`)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Error al crear los niveles PT.'
     targetUrl = errorUrl(rondaId, msg)
   }
 
@@ -110,26 +195,12 @@ export async function createPTSampleGroupAction(formData: FormData) {
       throw new Error('El nombre del grupo de muestra es obligatorio.')
     }
 
-    const { data: existing } = await getSupabaseAdmin()
-      .from('ronda_pt_sample_groups')
-      .select('id')
-      .eq('ronda_id', rondaId)
-      .eq('sample_group', sampleGroup)
-      .single()
-
-    if (existing) {
+    const existing = await listPTSampleGroups(rondaId)
+    if (existing.some((row) => row.sample_group === sampleGroup)) {
       throw new Error('Ya existe un grupo de muestra con este nombre en esta ronda.')
     }
 
-    const maxOrderResult = await getSupabaseAdmin()
-      .from('ronda_pt_sample_groups')
-      .select('sort_order')
-      .eq('ronda_id', rondaId)
-      .order('sort_order', { ascending: false })
-      .limit(1)
-      .single()
-
-    const sortOrder = (maxOrderResult.data?.sort_order ?? 0) + 1
+    const sortOrder = Math.max(0, ...existing.map((row) => row.sort_order)) + 1
 
     await createPTSampleGroup(rondaId, sampleGroup, sortOrder)
 
@@ -185,13 +256,7 @@ export async function deletePTItemAction(formData: FormData) {
       throw new Error('Datos incompletos para eliminar el item PT.')
     }
 
-    const { error } = await getSupabaseAdmin()
-      .from('ronda_pt_items')
-      .delete()
-      .eq('id', itemId)
-      .eq('ronda_id', rondaId)
-
-    if (error) throw new Error(error.message)
+    await deletePTItem(rondaId, itemId)
 
     revalidatePath(pageUrl(rondaId))
     targetUrl = successUrl(rondaId, 'Item PT eliminado correctamente.')
@@ -215,13 +280,7 @@ export async function deletePTSampleGroupAction(formData: FormData) {
       throw new Error('Datos incompletos para eliminar el grupo de muestra PT.')
     }
 
-    const { error } = await getSupabaseAdmin()
-      .from('ronda_pt_sample_groups')
-      .delete()
-      .eq('id', groupId)
-      .eq('ronda_id', rondaId)
-
-    if (error) throw new Error(error.message)
+    await deletePTSampleGroup(rondaId, groupId)
 
     revalidatePath(pageUrl(rondaId))
     targetUrl = successUrl(rondaId, 'Grupo de muestra PT eliminado correctamente.')

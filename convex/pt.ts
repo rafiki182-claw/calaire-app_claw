@@ -382,8 +382,12 @@ export const updateParticipantePT = mutation({
 })
 
 export const deletePTItem = mutation({
-  args: { itemId: v.id('rondaPtItems') },
-  handler: async (ctx, { itemId }) => {
+  args: { rondaId: v.id('rondas'), itemId: v.id('rondaPtItems') },
+  handler: async (ctx, { rondaId, itemId }) => {
+    const item = await ctx.db.get(itemId)
+    if (!item) return
+    if (item.rondaId !== rondaId) throw new Error('Item PT no pertenece a la ronda')
+
     // Cascada manual: eliminar envios_pt relacionados
     const envios = await ctx.db
       .query('enviosPt')
@@ -395,10 +399,11 @@ export const deletePTItem = mutation({
 })
 
 export const deletePTSampleGroup = mutation({
-  args: { groupId: v.id('rondaPtSampleGroups') },
-  handler: async (ctx, { groupId }) => {
+  args: { rondaId: v.id('rondas'), groupId: v.id('rondaPtSampleGroups') },
+  handler: async (ctx, { rondaId, groupId }) => {
     const group = await ctx.db.get(groupId)
     if (!group) return
+    if (group.rondaId !== rondaId) throw new Error('Grupo de muestra PT no pertenece a la ronda')
 
     // Cascada manual: eliminar envios_pt con este sampleGroupId
     const envios = await ctx.db

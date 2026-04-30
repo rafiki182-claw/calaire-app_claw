@@ -1,5 +1,18 @@
 import { v } from 'convex/values'
-import { query, mutation } from './_generated/server'
+import { query, mutation, QueryCtx, MutationCtx } from './_generated/server'
+import { Doc, Id } from './_generated/dataModel'
+
+async function getLatestFichaByRondaParticipante(
+  ctx: QueryCtx | MutationCtx,
+  rondaParticipanteId: Id<'rondaParticipantes'>
+): Promise<Doc<'fichasRegistro'> | null> {
+  const fichas = await ctx.db
+    .query('fichasRegistro')
+    .withIndex('by_ronda_participante', (q) => q.eq('rondaParticipanteId', rondaParticipanteId))
+    .collect()
+  fichas.sort((a, b) => b.updatedAt - a.updatedAt)
+  return fichas[0] ?? null
+}
 
 // ---------------------------------------------------------------------------
 // Fichas — read
@@ -15,10 +28,7 @@ export const getFichaById = query({
 export const getFichaByRondaParticipante = query({
   args: { rondaParticipanteId: v.id('rondaParticipantes') },
   handler: async (ctx, { rondaParticipanteId }) => {
-    const ficha = await ctx.db
-      .query('fichasRegistro')
-      .withIndex('by_ronda_participante', (q) => q.eq('rondaParticipanteId', rondaParticipanteId))
-      .unique()
+    const ficha = await getLatestFichaByRondaParticipante(ctx, rondaParticipanteId)
     if (!ficha) return null
 
     const [acompanantes, analizadores, instrumentos] = await Promise.all([
@@ -38,10 +48,7 @@ export const getFichaByRondaParticipante = query({
 export const getFichaResumenByRondaParticipante = query({
   args: { rondaParticipanteId: v.id('rondaParticipantes') },
   handler: async (ctx, { rondaParticipanteId }) => {
-    const ficha = await ctx.db
-      .query('fichasRegistro')
-      .withIndex('by_ronda_participante', (q) => q.eq('rondaParticipanteId', rondaParticipanteId))
-      .unique()
+    const ficha = await getLatestFichaByRondaParticipante(ctx, rondaParticipanteId)
     if (!ficha) return null
     return { id: ficha._id, rondaParticipanteId: ficha.rondaParticipanteId, estado: ficha.estado }
   },
@@ -52,12 +59,7 @@ export const listFichaResumenesByRpIds = query({
   handler: async (ctx, { rpIds }) => {
     if (rpIds.length === 0) return {}
     const fichas = await Promise.all(
-      rpIds.map((rpId) =>
-        ctx.db
-          .query('fichasRegistro')
-          .withIndex('by_ronda_participante', (q) => q.eq('rondaParticipanteId', rpId))
-          .unique()
-      )
+      rpIds.map((rpId) => getLatestFichaByRondaParticipante(ctx, rpId))
     )
     const result: Record<string, { id: string; rondaParticipanteId: string; estado: string }> = {}
     for (const ficha of fichas) {
@@ -76,12 +78,7 @@ export const listFichaResumenesByRonda = query({
       .collect()
 
     const fichas = await Promise.all(
-      participantes.map((p) =>
-        ctx.db
-          .query('fichasRegistro')
-          .withIndex('by_ronda_participante', (q) => q.eq('rondaParticipanteId', p._id))
-          .unique()
-      )
+      participantes.map((p) => getLatestFichaByRondaParticipante(ctx, p._id))
     )
 
     const result: Record<string, { id: string; rondaParticipanteId: string; estado: string }> = {}
@@ -99,10 +96,7 @@ export const listFichaResumenesByRonda = query({
 export const getOrCreateFicha = mutation({
   args: { rondaParticipanteId: v.id('rondaParticipantes') },
   handler: async (ctx, { rondaParticipanteId }) => {
-    const existing = await ctx.db
-      .query('fichasRegistro')
-      .withIndex('by_ronda_participante', (q) => q.eq('rondaParticipanteId', rondaParticipanteId))
-      .unique()
+    const existing = await getLatestFichaByRondaParticipante(ctx, rondaParticipanteId)
     if (existing) return existing._id
 
     const now = Date.now()
@@ -163,6 +157,9 @@ export const replaceAcompanantes = mutation({
     })),
   },
   handler: async (ctx, { fichaId, items }) => {
+    const ficha = await ctx.db.get(fichaId)
+    if (!ficha || ficha.estado !== 'borrador') throw new Error('Ficha no editable')
+
     const existing = await ctx.db
       .query('fichasAcompanantes')
       .withIndex('by_ficha', (q) => q.eq('fichaId', fichaId))
@@ -190,6 +187,9 @@ export const replaceAnalizadores = mutation({
     })),
   },
   handler: async (ctx, { fichaId, items }) => {
+    const ficha = await ctx.db.get(fichaId)
+    if (!ficha || ficha.estado !== 'borrador') throw new Error('Ficha no editable')
+
     const existing = await ctx.db
       .query('fichasAnalizadores')
       .withIndex('by_ficha', (q) => q.eq('fichaId', fichaId))
@@ -212,6 +212,9 @@ export const replaceInstrumentos = mutation({
     })),
   },
   handler: async (ctx, { fichaId, items }) => {
+    const ficha = await ctx.db.get(fichaId)
+    if (!ficha || ficha.estado !== 'borrador') throw new Error('Ficha no editable')
+
     const existing = await ctx.db
       .query('fichasInstrumentos')
       .withIndex('by_ficha', (q) => q.eq('fichaId', fichaId))
@@ -234,6 +237,10 @@ export const submitFicha = mutation({
 export const reabrirFicha = mutation({
   args: { fichaId: v.id('fichasRegistro') },
   handler: async (ctx, { fichaId }) => {
+    const ficha = await ctx.db.get(fichaId)
+    if (!ficha) throw new Error('Ficha no encontrada')
+    if (ficha.estado !== 'enviado') throw new Error('Ficha no enviada')
+
     await ctx.db.patch(fichaId, { estado: 'borrador', updatedAt: Date.now() })
   },
 })
