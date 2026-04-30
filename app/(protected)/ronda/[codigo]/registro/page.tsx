@@ -23,19 +23,6 @@ export default async function RegistroPage({ params }: Props) {
   if (!admin) {
     const invitado = await isInvitado(ronda.id, auth.user.id)
     if (!invitado) redirect('/denied?reason=invite')
-
-    if (ronda.estado === 'borrador') {
-      return (
-        <div className="min-h-screen bg-[var(--background)] flex items-center justify-center px-6">
-          <div className="card max-w-md p-10 text-center">
-            <h2 className="text-lg font-semibold text-[var(--foreground)] mb-2">Ronda no disponible</h2>
-            <p className="text-sm text-[var(--foreground-muted)]">
-              La ronda <strong>{codigo}</strong> aún no ha sido activada. Vuelva más tarde.
-            </p>
-          </div>
-        </div>
-      )
-    }
   }
 
   const rp = await getRondaParticipantePT(ronda.id, auth.user.id)
@@ -65,6 +52,7 @@ export default async function RegistroPage({ params }: Props) {
     <FormularioRegistro
       codigoRonda={codigo}
       rondaCodigo={ronda.codigo}
+      rondaEstado={ronda.estado}
       participanteCodigo={rp.participant_code}
       ficha={ficha}
       soloLectura={soloLectura}

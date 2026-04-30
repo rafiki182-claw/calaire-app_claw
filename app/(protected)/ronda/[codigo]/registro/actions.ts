@@ -1,5 +1,8 @@
 'use server'
 
+import { signOut } from '@workos-inc/authkit-nextjs'
+
+import { buildAbsoluteAppUrl } from '@/lib/app-url'
 import { requireAuth, isAdmin } from '@/lib/auth'
 import { getRondaByCodigo, getRondaParticipantePT, isInvitado } from '@/lib/rondas'
 import {
@@ -96,4 +99,8 @@ export async function enviarFichaFinalAction(
 
   await submitFicha(ficha.id)
   return { ok: true }
+}
+
+export async function cerrarSesionParticipanteAction() {
+  await signOut({ returnTo: buildAbsoluteAppUrl('/login') })
 }

@@ -1,4 +1,3 @@
-import Link from 'next/link'
 import { notFound, redirect } from 'next/navigation'
 
 import { isAdmin, requireAuth } from '@/lib/auth'
@@ -10,6 +9,8 @@ import {
   type ResultadoParticipantePT,
   type Ronda,
 } from '@/lib/rondas'
+import { RondaContextNav } from '../RondaContextNav'
+import { EstadoBadge } from '@/app/(protected)/dashboard/components/EstadoBadge'
 
 type PageProps = {
   params: Promise<{ id: string }>
@@ -30,22 +31,6 @@ function formatDate(value: string | null) {
   )
 }
 
-function estadoBadge(ronda: Ronda) {
-  const classes =
-    ronda.estado === 'activa'
-      ? 'bg-emerald-100 text-emerald-800'
-      : ronda.estado === 'cerrada'
-        ? 'bg-slate-200 text-slate-700'
-        : 'bg-amber-100 text-amber-800'
-
-  return (
-    <span
-      className={`rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase tracking-[0.14em] ${classes}`}
-    >
-      {ronda.estado}
-    </span>
-  )
-}
 
 function completitudBadge(resultado: ResultadoParticipantePT) {
   const done = resultado.completados >= resultado.total_esperado && resultado.total_esperado > 0
@@ -101,31 +86,15 @@ export default async function ResultadosPage({ params }: PageProps) {
   return (
     <div className="min-h-screen bg-[var(--background)] px-6 py-8">
       <div className="mx-auto flex max-w-7xl flex-col gap-6">
+        {/* Context Navigation */}
+        <RondaContextNav rondaId={rondaId} rondaCodigo={ronda.codigo} />
+
         <header className="header-bar px-6 py-5">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div className="flex flex-col gap-1">
-              <div className="flex items-center gap-2">
-                <Link
-                  href="/dashboard"
-                  className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--foreground-muted)] transition hover:text-[var(--foreground)]"
-                >
-                  CALAIRE-EA
-                </Link>
-                <span className="text-[var(--border)]">/</span>
-                <Link
-                  href={`/dashboard/rondas/${ronda.id}/participantes`}
-                  className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--foreground-muted)] transition hover:text-[var(--foreground)]"
-                >
-                  Participantes
-                </Link>
-                <span className="text-[var(--border)]">/</span>
-                <span className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--foreground-muted)]">
-                  Resultados PT
-                </span>
-              </div>
               <div className="flex flex-wrap items-center gap-3">
                 <h1 className="text-2xl font-semibold text-[var(--foreground)]">{ronda.nombre}</h1>
-                {estadoBadge(ronda)}
+                <EstadoBadge estado={ronda.estado} />
               </div>
               <p className="text-sm text-[var(--foreground-muted)]">
                 Código <span className="font-medium text-[var(--foreground)]">{ronda.codigo}</span> ·{' '}
@@ -135,9 +104,6 @@ export default async function ResultadosPage({ params }: PageProps) {
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
-              <Link href={`/dashboard/rondas/${ronda.id}/configuracion-pt`} className="btn-outline">
-                Configuración PT
-              </Link>
               {canExport ? (
                 <a href={`/dashboard/rondas/${ronda.id}/resultados/export-pt.csv`} className="btn-primary">
                   Exportar CSV PT

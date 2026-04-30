@@ -10,8 +10,8 @@ import {
   type AcompananteInput,
   type AnalizadorInput,
   type InstrumentoInput,
+  upsertFichaScalars,
 } from '@/lib/fichas'
-import { getSupabaseAdmin } from '@/lib/supabase'
 
 export async function adminGuardarCampoFichaAction(
   fichaId: string,
@@ -24,13 +24,13 @@ export async function adminGuardarCampoFichaAction(
     return { error: 'Campo no permitido' }
   }
 
-  const { error } = await getSupabaseAdmin()
-    .from('fichas_registro')
-    .update({ [field as FichaScalarField]: value })
-    .eq('id', fichaId)
-
-  if (error) return { error: `No fue posible guardar el campo: ${error.message}` }
-  return { ok: true }
+  try {
+    await upsertFichaScalars(fichaId, field as FichaScalarField, value)
+    return { ok: true }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Error al guardar el campo'
+    return { error: `No fue posible guardar el campo: ${msg}` }
+  }
 }
 
 export async function adminGuardarListasAction(

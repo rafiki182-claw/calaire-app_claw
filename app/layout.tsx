@@ -1,22 +1,10 @@
 import type { Metadata } from 'next'
-import { DM_Sans, JetBrains_Mono } from 'next/font/google'
 import './globals.css'
-
-const dmSans = DM_Sans({
-  variable: '--font-sans',
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-})
-
-const jetbrainsMono = JetBrains_Mono({
-  variable: '--font-mono',
-  subsets: ['latin'],
-  weight: ['400', '500'],
-})
+import { ConvexClientProvider } from './providers'
 
 export const metadata: Metadata = {
-  title: 'CALAIRE-EA',
-  description: 'Portal de Ensayos de Aptitud para rondas y participantes',
+  title: 'CALAIRE APP',
+  description: 'Dashboard para Ensayos de Aptitud de Calidad de Aire',
 }
 
 export default function RootLayout({
@@ -27,10 +15,10 @@ export default function RootLayout({
   return (
     <html
       lang="es"
-      className={`${dmSans.variable} ${jetbrainsMono.variable} h-full antialiased`}
+      className="h-full antialiased"
     >
       <body className="min-h-full flex flex-col bg-[var(--background)] text-[var(--foreground)]">
-        {children}
+        <ConvexClientProvider>{children}</ConvexClientProvider>
       </body>
     </html>
   )

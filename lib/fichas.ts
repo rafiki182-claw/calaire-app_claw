@@ -1,4 +1,6 @@
-import { getSupabaseAdmin } from '@/lib/supabase'
+import { fetchQuery, fetchMutation } from 'convex/nextjs'
+import { api } from '@/convex/_generated/api'
+import type { Id } from '@/convex/_generated/dataModel'
 
 export type EstadoFicha = 'borrador' | 'enviado'
 
@@ -95,174 +97,251 @@ export const FICHA_SCALAR_ALLOWLIST = [
 
 export type FichaScalarField = (typeof FICHA_SCALAR_ALLOWLIST)[number]
 
+// ---------------------------------------------------------------------------
+// Internal field-mapping helpers
+// ---------------------------------------------------------------------------
+
+// Maps snake_case lib field names to camelCase Convex field names
+const SCALAR_FIELD_MAP: Record<FichaScalarField, 'nombreLaboratorio' | 'nombreResponsable' | 'cargo' | 'ciudad' | 'departamento' | 'telefono' | 'transporte' | 'horaLlegada' | 'estacionamiento' | 'observaciones' | 'decDatosCorrectos' | 'decAceptaCondiciones' | 'decCompromisos' | 'decFirmaAutorizada' | 'nombreFirma'> = {
+  nombre_laboratorio:    'nombreLaboratorio',
+  nombre_responsable:    'nombreResponsable',
+  cargo:                 'cargo',
+  ciudad:                'ciudad',
+  departamento:          'departamento',
+  telefono:              'telefono',
+  transporte:            'transporte',
+  hora_llegada:          'horaLlegada',
+  estacionamiento:       'estacionamiento',
+  observaciones:         'observaciones',
+  dec_datos_correctos:   'decDatosCorrectos',
+  dec_acepta_condiciones:'decAceptaCondiciones',
+  dec_compromisos:       'decCompromisos',
+  dec_firma_autorizada:  'decFirmaAutorizada',
+  nombre_firma:          'nombreFirma',
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapFichaDoc(doc: any): FichaRegistro {
+  return {
+    id: doc._id as string,
+    ronda_participante_id: doc.rondaParticipanteId as string,
+    nombre_laboratorio: (doc.nombreLaboratorio ?? null) as string | null,
+    nombre_responsable: (doc.nombreResponsable ?? null) as string | null,
+    cargo: (doc.cargo ?? null) as string | null,
+    ciudad: (doc.ciudad ?? null) as string | null,
+    departamento: (doc.departamento ?? null) as string | null,
+    telefono: (doc.telefono ?? null) as string | null,
+    transporte: (doc.transporte ?? null) as string | null,
+    hora_llegada: (doc.horaLlegada ?? null) as string | null,
+    estacionamiento: (doc.estacionamiento ?? false) as boolean,
+    observaciones: (doc.observaciones ?? null) as string | null,
+    dec_datos_correctos: (doc.decDatosCorrectos ?? false) as boolean,
+    dec_acepta_condiciones: (doc.decAceptaCondiciones ?? false) as boolean,
+    dec_compromisos: (doc.decCompromisos ?? false) as boolean,
+    dec_firma_autorizada: (doc.decFirmaAutorizada ?? false) as boolean,
+    nombre_firma: (doc.nombreFirma ?? null) as string | null,
+    estado: doc.estado as EstadoFicha,
+    created_at: new Date(doc.createdAt as number).toISOString(),
+    updated_at: new Date(doc.updatedAt as number).toISOString(),
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapAcompananteDoc(a: any): Acompanante {
+  return {
+    id: a._id as string,
+    ficha_id: a.fichaId as string,
+    sort_order: a.sortOrder as number,
+    nombre_completo: a.nombreCompleto as string,
+    documento_identidad: a.documentoIdentidad as string,
+    rol: a.rol as string,
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapAnalizadorDoc(a: any): Analizador {
+  return {
+    id: a._id as string,
+    ficha_id: a.fichaId as string,
+    sort_order: a.sortOrder as number,
+    analito: a.analito as string,
+    fabricante: a.fabricante as string,
+    modelo: a.modelo as string,
+    numero_serie: a.numeroSerie as string,
+    metodo_epa: a.metodoEpa as string,
+    fecha_ultima_calibracion: (a.fechaUltimaCalibracion ?? null) as string | null,
+    tipo_verificacion: a.tipoVerificacion as string,
+    incertidumbre_declarada: a.incertidumbreDeclarada as string,
+    unidad_salida: a.unidadSalida as string,
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapInstrumentoDoc(i: any): Instrumento {
+  return {
+    id: i._id as string,
+    ficha_id: i.fichaId as string,
+    sort_order: i.sortOrder as number,
+    equipo: i.equipo as string,
+    marca_modelo: i.marcaModelo as string,
+    numero_serie: i.numeroSerie as string,
+    cantidad: i.cantidad as number,
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapFichaResumenFromResult(r: any): FichaResumen {
+  return {
+    id: r.id as string,
+    ronda_participante_id: r.rondaParticipanteId as string,
+    estado: r.estado as EstadoFicha,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fichas — queries
+// ---------------------------------------------------------------------------
+
 export async function getOrCreateFicha(rondaParticipanteId: string): Promise<FichaRegistro> {
-  const admin = getSupabaseAdmin()
-
-  const { data: existing } = await admin
-    .from('fichas_registro')
-    .select('*')
-    .eq('ronda_participante_id', rondaParticipanteId)
-    .maybeSingle()
-
-  if (existing) return existing as FichaRegistro
-
-  const { data, error } = await admin
-    .from('fichas_registro')
-    .insert({ ronda_participante_id: rondaParticipanteId })
-    .select()
-    .single()
-
-  if (error) throw new Error(`No fue posible crear la ficha de registro: ${error.message}`)
-  return data as FichaRegistro
+  const id = await fetchMutation(api.fichas.getOrCreateFicha, {
+    rondaParticipanteId: rondaParticipanteId as Id<'rondaParticipantes'>,
+  })
+  const doc = await fetchQuery(api.fichas.getFichaById, {
+    fichaId: id as Id<'fichasRegistro'>,
+  })
+  if (!doc) throw new Error('No fue posible crear la ficha de registro')
+  return mapFichaDoc(doc)
 }
 
 export async function getFichaByRondaParticipante(
   rondaParticipanteId: string
 ): Promise<FichaCompleta | null> {
-  const admin = getSupabaseAdmin()
-
-  const { data: ficha, error } = await admin
-    .from('fichas_registro')
-    .select('*')
-    .eq('ronda_participante_id', rondaParticipanteId)
-    .maybeSingle()
-
-  if (error) throw new Error(`No fue posible cargar la ficha: ${error.message}`)
-  if (!ficha) return null
-
-  const [{ data: acompanantes }, { data: analizadores }, { data: instrumentos }] =
-    await Promise.all([
-      admin
-        .from('fichas_registro_acompanantes')
-        .select('*')
-        .eq('ficha_id', ficha.id)
-        .order('sort_order'),
-      admin
-        .from('fichas_registro_analizadores')
-        .select('*')
-        .eq('ficha_id', ficha.id)
-        .order('sort_order'),
-      admin
-        .from('fichas_registro_instrumentos')
-        .select('*')
-        .eq('ficha_id', ficha.id)
-        .order('sort_order'),
-    ])
+  const result = await fetchQuery(api.fichas.getFichaByRondaParticipante, {
+    rondaParticipanteId: rondaParticipanteId as Id<'rondaParticipantes'>,
+  })
+  if (!result) return null
 
   return {
-    ...(ficha as FichaRegistro),
-    acompanantes: (acompanantes ?? []) as Acompanante[],
-    analizadores: (analizadores ?? []) as Analizador[],
-    instrumentos: (instrumentos ?? []) as Instrumento[],
+    ...mapFichaDoc(result),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    acompanantes: (result.acompanantes as any[]).map(mapAcompananteDoc),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    analizadores: (result.analizadores as any[]).map(mapAnalizadorDoc),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    instrumentos: (result.instrumentos as any[]).map(mapInstrumentoDoc),
   }
 }
 
 export async function getFichaResumenByRondaParticipante(
   rondaParticipanteId: string
 ): Promise<FichaResumen | null> {
-  const { data, error } = await getSupabaseAdmin()
-    .from('fichas_registro')
-    .select('id, ronda_participante_id, estado')
-    .eq('ronda_participante_id', rondaParticipanteId)
-    .maybeSingle()
-
-  if (error) throw new Error(`No fue posible cargar el resumen de ficha: ${error.message}`)
-  return data as FichaResumen | null
+  const result = await fetchQuery(api.fichas.getFichaResumenByRondaParticipante, {
+    rondaParticipanteId: rondaParticipanteId as Id<'rondaParticipantes'>,
+  })
+  if (!result) return null
+  return mapFichaResumenFromResult(result)
 }
 
 export async function getFichasResumenByRpIds(
   rpIds: string[]
 ): Promise<Record<string, FichaResumen>> {
   if (rpIds.length === 0) return {}
-
-  const { data, error } = await getSupabaseAdmin()
-    .from('fichas_registro')
-    .select('id, ronda_participante_id, estado')
-    .in('ronda_participante_id', rpIds)
-
-  if (error) throw new Error(`No fue posible cargar las fichas: ${error.message}`)
-
-  return (data ?? []).reduce<Record<string, FichaResumen>>((acc, row) => {
-    acc[row.ronda_participante_id] = row as FichaResumen
-    return acc
-  }, {})
+  const result = await fetchQuery(api.fichas.listFichaResumenesByRpIds, {
+    rpIds: rpIds as Id<'rondaParticipantes'>[],
+  })
+  const mapped: Record<string, FichaResumen> = {}
+  for (const [rpId, r] of Object.entries(result)) {
+    mapped[rpId] = mapFichaResumenFromResult(r)
+  }
+  return mapped
 }
 
 export async function listFichaResumenesByRonda(
   rondaId: string
 ): Promise<Record<string, FichaResumen>> {
-  const admin = getSupabaseAdmin()
-
-  const { data: rpRows, error: rpError } = await admin
-    .from('ronda_participantes')
-    .select('id')
-    .eq('ronda_id', rondaId)
-
-  if (rpError) throw new Error(`No fue posible cargar los participantes: ${rpError.message}`)
-
-  const rpIds = (rpRows ?? []).map((row) => row.id)
-  return getFichasResumenByRpIds(rpIds)
+  const result = await fetchQuery(api.fichas.listFichaResumenesByRonda, {
+    rondaId: rondaId as Id<'rondas'>,
+  })
+  const mapped: Record<string, FichaResumen> = {}
+  for (const [rpId, r] of Object.entries(result)) {
+    mapped[rpId] = mapFichaResumenFromResult(r)
+  }
+  return mapped
 }
+
+// ---------------------------------------------------------------------------
+// Fichas — mutations
+// ---------------------------------------------------------------------------
 
 export async function upsertFichaScalars(
   fichaId: string,
   field: FichaScalarField,
   value: string | boolean | null
 ): Promise<void> {
-  const { error } = await getSupabaseAdmin()
-    .from('fichas_registro')
-    .update({ [field]: value })
-    .eq('id', fichaId)
-    .eq('estado', 'borrador')
-
-  if (error) throw new Error(`No fue posible guardar el campo: ${error.message}`)
+  const convexField = SCALAR_FIELD_MAP[field]
+  await fetchMutation(api.fichas.upsertFichaScalar, {
+    fichaId: fichaId as Id<'fichasRegistro'>,
+    field: convexField,
+    ...(typeof value === 'boolean'
+      ? { valueBoolean: value }
+      : { valueString: value }),
+  })
 }
 
 export async function replaceAcompanantes(
   fichaId: string,
   items: AcompananteInput[]
 ): Promise<void> {
-  const admin = getSupabaseAdmin()
-  await admin.from('fichas_registro_acompanantes').delete().eq('ficha_id', fichaId)
-  if (items.length === 0) return
-  const { error } = await admin
-    .from('fichas_registro_acompanantes')
-    .insert(items.map((item) => ({ ...item, ficha_id: fichaId })))
-  if (error) throw new Error(`No fue posible guardar acompañantes: ${error.message}`)
+  await fetchMutation(api.fichas.replaceAcompanantes, {
+    fichaId: fichaId as Id<'fichasRegistro'>,
+    items: items.map((item) => ({
+      sortOrder:          item.sort_order,
+      nombreCompleto:     item.nombre_completo,
+      documentoIdentidad: item.documento_identidad,
+      rol:                item.rol,
+    })),
+  })
 }
 
 export async function replaceAnalizadores(
   fichaId: string,
   items: AnalizadorInput[]
 ): Promise<void> {
-  const admin = getSupabaseAdmin()
-  await admin.from('fichas_registro_analizadores').delete().eq('ficha_id', fichaId)
-  if (items.length === 0) return
-  const { error } = await admin
-    .from('fichas_registro_analizadores')
-    .insert(items.map((item) => ({ ...item, ficha_id: fichaId })))
-  if (error) throw new Error(`No fue posible guardar analizadores: ${error.message}`)
+  await fetchMutation(api.fichas.replaceAnalizadores, {
+    fichaId: fichaId as Id<'fichasRegistro'>,
+    items: items.map((item) => ({
+      sortOrder:              item.sort_order,
+      analito:                item.analito,
+      fabricante:             item.fabricante,
+      modelo:                 item.modelo,
+      numeroSerie:            item.numero_serie,
+      metodoEpa:              item.metodo_epa,
+      fechaUltimaCalibracion: item.fecha_ultima_calibracion ?? undefined,
+      tipoVerificacion:       item.tipo_verificacion,
+      incertidumbreDeclarada: item.incertidumbre_declarada,
+      unidadSalida:           item.unidad_salida,
+    })),
+  })
 }
 
 export async function replaceInstrumentos(
   fichaId: string,
   items: InstrumentoInput[]
 ): Promise<void> {
-  const admin = getSupabaseAdmin()
-  await admin.from('fichas_registro_instrumentos').delete().eq('ficha_id', fichaId)
-  if (items.length === 0) return
-  const { error } = await admin
-    .from('fichas_registro_instrumentos')
-    .insert(items.map((item) => ({ ...item, ficha_id: fichaId })))
-  if (error) throw new Error(`No fue posible guardar instrumentos: ${error.message}`)
+  await fetchMutation(api.fichas.replaceInstrumentos, {
+    fichaId: fichaId as Id<'fichasRegistro'>,
+    items: items.map((item) => ({
+      sortOrder:   item.sort_order,
+      equipo:      item.equipo,
+      marcaModelo: item.marca_modelo,
+      numeroSerie: item.numero_serie,
+      cantidad:    item.cantidad,
+    })),
+  })
 }
 
 export async function submitFicha(fichaId: string): Promise<void> {
-  const { error } = await getSupabaseAdmin()
-    .from('fichas_registro')
-    .update({ estado: 'enviado' })
-    .eq('id', fichaId)
-    .eq('estado', 'borrador')
-
-  if (error) throw new Error(`No fue posible enviar la ficha: ${error.message}`)
+  await fetchMutation(api.fichas.submitFicha, {
+    fichaId: fichaId as Id<'fichasRegistro'>,
+  })
 }

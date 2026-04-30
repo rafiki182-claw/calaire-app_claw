@@ -5,8 +5,15 @@ import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 
 import { requireAuth, isAdmin } from '@/lib/auth'
-import { getSupabaseAdmin } from '@/lib/supabase'
-import { PENDING_PARTICIPANTE_PREFIX } from '@/lib/rondas'
+import {
+  PENDING_PARTICIPANTE_PREFIX,
+  addReferenceSlot,
+  assignParticipante,
+  getRonda,
+  listParticipantes,
+  regenerateParticipanteSlot,
+  removeParticipante,
+} from '@/lib/rondas'
 import { findUserByEmail, createWorkOSUser } from '@/lib/workos'
 
 function pageUrl(rondaId: string) {
@@ -80,29 +87,15 @@ export async function inviteParticipanteAction(formData: FormData) {
       throw new Error('Datos incompletos para la invitación.')
     }
 
-    const { data: ronda } = await getSupabaseAdmin()
-      .from('rondas')
-      .select('estado')
-      .eq('id', rondaId)
-      .single()
-
-    if (ronda?.estado === 'cerrada') {
+    const ronda = await getRonda(rondaId)
+    if (!ronda) {
+      throw new Error('Ronda no encontrada.')
+    }
+    if (ronda.estado === 'cerrada') {
       throw new Error('No se puede asignar participantes a una ronda cerrada.')
     }
 
-    const { error } = await getSupabaseAdmin()
-      .from('ronda_participantes')
-      .insert({
-        ronda_id: rondaId,
-        workos_user_id: workosUserId,
-        email,
-        participant_profile: 'member',
-      })
-
-    if (error) {
-      if (error.code === '23505') throw new Error('Este usuario ya está asignado a esta ronda.')
-      throw new Error(error.message)
-    }
+    await assignParticipante(rondaId, workosUserId, email, 'member')
 
     revalidatePath(pageUrl(rondaId))
     targetUrl = successUrl(rondaId, 'Participante agregado correctamente.')
@@ -126,13 +119,11 @@ export async function createAndInviteAction(formData: FormData) {
   try {
     if (!rondaId || !email) throw new Error('El correo es obligatorio.')
 
-    const { data: ronda } = await getSupabaseAdmin()
-      .from('rondas')
-      .select('estado')
-      .eq('id', rondaId)
-      .single()
-
-    if (ronda?.estado === 'cerrada') {
+    const ronda = await getRonda(rondaId)
+    if (!ronda) {
+      throw new Error('Ronda no encontrada.')
+    }
+    if (ronda.estado === 'cerrada') {
       throw new Error('No se puede asignar participantes a una ronda cerrada.')
     }
 
@@ -143,19 +134,7 @@ export async function createAndInviteAction(formData: FormData) {
 
     const newUser = await createWorkOSUser(email, firstName, lastName)
 
-    const { error } = await getSupabaseAdmin()
-      .from('ronda_participantes')
-      .insert({
-        ronda_id: rondaId,
-        workos_user_id: newUser.id,
-        email: newUser.email,
-        participant_profile: 'member',
-      })
-
-    if (error) {
-      if (error.code === '23505') throw new Error('Este usuario ya está asignado a esta ronda.')
-      throw new Error(error.message)
-    }
+    await assignParticipante(rondaId, newUser.id, newUser.email, 'member')
 
     revalidatePath(pageUrl(rondaId))
     targetUrl = successUrl(rondaId, `Usuario ${email} creado e invitado correctamente.`)
@@ -177,40 +156,29 @@ export async function regenerateSlotAction(formData: FormData) {
   try {
     if (!rondaId || !participanteId) throw new Error('Datos incompletos.')
 
-    const { data: ronda } = await getSupabaseAdmin()
-      .from('rondas')
-      .select('estado')
-      .eq('id', rondaId)
-      .single()
-
-    if (ronda?.estado === 'cerrada') {
+    const ronda = await getRonda(rondaId)
+    if (!ronda) {
+      throw new Error('Ronda no encontrada.')
+    }
+    if (ronda.estado === 'cerrada') {
       throw new Error('No se puede modificar una ronda cerrada.')
     }
 
-    const { data: participante, error: participanteError } = await getSupabaseAdmin()
-      .from('ronda_participantes')
-      .select('participant_profile')
-      .eq('id', participanteId)
-      .eq('ronda_id', rondaId)
-      .single()
+    const participantes = await listParticipantes(rondaId)
+    const target = participantes.find((p) => p.id === participanteId)
 
-    if (participanteError || !participante) {
+    if (!target) {
       throw new Error('No se encontró el participante a regenerar.')
     }
 
-    const profile = participante.participant_profile === 'member_special' ? 'member_special' : 'member'
+    const profile = target.participant_profile === 'member_special' ? 'member_special' : 'member'
     const newToken = randomBytes(12).toString('hex')
-    const { error } = await getSupabaseAdmin()
-      .from('ronda_participantes')
-      .update({
-        workos_user_id: `${PENDING_PARTICIPANTE_PREFIX}${newToken}`,
-        email: pendingLabel(profile),
-        claimed_at: null,
-      })
-      .eq('id', participanteId)
-      .eq('ronda_id', rondaId)
-
-    if (error) throw new Error(error.message)
+    await regenerateParticipanteSlot(
+      rondaId,
+      participanteId,
+      `${PENDING_PARTICIPANTE_PREFIX}${newToken}`,
+      pendingLabel(profile)
+    )
 
     revalidatePath(pageUrl(rondaId))
     targetUrl = successUrl(rondaId, 'Enlace regenerado. El enlace anterior ya no es válido.')
@@ -232,23 +200,15 @@ export async function removeParticipanteAction(formData: FormData) {
   try {
     if (!rondaId || !participanteId) throw new Error('Datos incompletos.')
 
-    const { data: ronda } = await getSupabaseAdmin()
-      .from('rondas')
-      .select('estado')
-      .eq('id', rondaId)
-      .single()
-
-    if (ronda?.estado === 'cerrada') {
+    const ronda = await getRonda(rondaId)
+    if (!ronda) {
+      throw new Error('Ronda no encontrada.')
+    }
+    if (ronda.estado === 'cerrada') {
       throw new Error('No se puede modificar la lista de una ronda cerrada.')
     }
 
-    const { error } = await getSupabaseAdmin()
-      .from('ronda_participantes')
-      .delete()
-      .eq('id', participanteId)
-      .eq('ronda_id', rondaId)
-
-    if (error) throw new Error(error.message)
+    await removeParticipante(rondaId, participanteId)
 
     revalidatePath(pageUrl(rondaId))
     targetUrl = successUrl(rondaId, 'Participante eliminado de la ronda.')
@@ -269,37 +229,19 @@ export async function addReferenceSlotAction(formData: FormData) {
   try {
     if (!rondaId) throw new Error('Datos incompletos.')
 
-    const { data: ronda } = await getSupabaseAdmin()
-      .from('rondas')
-      .select('estado')
-      .eq('id', rondaId)
-      .single()
-
-    if (ronda?.estado === 'cerrada') {
+    const ronda = await getRonda(rondaId)
+    if (!ronda) {
+      throw new Error('Ronda no encontrada.')
+    }
+    if (ronda.estado === 'cerrada') {
       throw new Error('No se puede modificar una ronda cerrada.')
     }
 
-    const { count, error: countError } = await getSupabaseAdmin()
-      .from('ronda_participantes')
-      .select('id', { count: 'exact', head: true })
-      .eq('ronda_id', rondaId)
-      .eq('participant_profile', 'member_special')
-
-    if (countError) throw new Error(countError.message)
-    if ((count ?? 0) > 0) {
-      throw new Error('Esta ronda ya tiene un enlace de referencia.')
-    }
-
-    const { error: insertError } = await getSupabaseAdmin()
-      .from('ronda_participantes')
-      .insert({
-        ronda_id: rondaId,
-        workos_user_id: `${PENDING_PARTICIPANTE_PREFIX}${randomBytes(12).toString('hex')}`,
-        email: pendingLabel('member_special'),
-        participant_profile: 'member_special',
-      })
-
-    if (insertError) throw new Error(insertError.message)
+    await addReferenceSlot(
+      rondaId,
+      `${PENDING_PARTICIPANTE_PREFIX}${randomBytes(12).toString('hex')}`,
+      pendingLabel('member_special')
+    )
 
     revalidatePath(pageUrl(rondaId))
     targetUrl = successUrl(rondaId, 'Referencia agregada con enlace individual.')

@@ -31,7 +31,7 @@ export default async function FichaAdminPage({ params }: Props) {
                 href="/dashboard"
                 className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--foreground-muted)] transition hover:text-[var(--foreground)]"
               >
-                CALAIRE-EA
+                CALAIRE APP
               </Link>
               <span className="text-[var(--border)]">/</span>
               <Link
